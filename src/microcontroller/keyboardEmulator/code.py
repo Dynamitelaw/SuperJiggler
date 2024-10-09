@@ -59,7 +59,7 @@ keycodeList = [
 for key in keycodeList:
 	#Unshifted
 	g_kbd.press(key)
-	time.sleep(0.100)
+	time.sleep(0.06)
 	g_kbd.release(key)
 
 	time.sleep(0.2)
