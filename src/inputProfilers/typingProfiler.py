@@ -3,6 +3,7 @@ import keyboard
 import json
 import numpy as np
 import math
+import os
 
 
 g_ordered_key_events = []
@@ -32,7 +33,7 @@ def logKeyEvent(event):
 		g_keyEventCount[event.name] += 1
 
 
-def captureKeystrokes():
+def captureKeystrokeData():
 	global g_keyEventCount
 
 	#Prepopulate g_keyEventCount
@@ -41,6 +42,8 @@ def captureKeystrokes():
 
 	#Collect typing data
 	print("Collecting typing data...")
+	hook = keyboard.hook(logKeyEvent)
+
 	enoughSamplesCollected = False
 	startTime = time.time()
 	while (not enoughSamplesCollected):
@@ -56,6 +59,7 @@ def captureKeystrokes():
 			enoughSamplesCollected = True
 
 	print("Data collection complete")
+	keyboard.unhook(hook)
 	
 
 def extractKeystrokeData(ordered_key_events):
@@ -77,7 +81,8 @@ def extractKeystrokeData(ordered_key_events):
 			key_hit_times[key.name][prev_key.name] = []
 
 		hitTime = key.time - prev_key.time
-		key_hit_times[key.name][prev_key.name].append(hitTime)
+		if (hitTime < 60):
+			key_hit_times[key.name][prev_key.name].append(hitTime)
 
 	#Get the times each key is held for
 	press_time_dict = {}
@@ -97,7 +102,7 @@ def extractKeystrokeData(ordered_key_events):
 
 			releaseTime = event.time
 			holdTime = releaseTime - pressTime
-			if (holdTime > 0):
+			if (holdTime > 0) and (holdTime < 60):
 				if not (keyName in hold_time_dict):
 					hold_time_dict[keyName] = []
 
@@ -149,12 +154,10 @@ def fineTuneDistribution(global_average, global_std, new_data, blend_factor=5):
 
 
 def analyzeKeystrokes(ordered_key_events):
-	print("Analyzing keystroke data")
 	#Extract keystroke data
 	key_data = extractKeystrokeData(ordered_key_events)
 
-	print(json.dumps(key_data, indent=2, sort_keys=True))
-
+	print("Analyzing keystroke data")
 	#Get list of all hit delays
 	all_hit_delays = []
 	for keyName in key_data["hit_delays"]:
@@ -263,12 +266,49 @@ def analyzeKeystrokes(ordered_key_events):
 	return stats
 
 
+def saveRawData(output_path="typing_data.log"):
+	if not (os.path.exists(output_path)):
+		output_file = open(output_path, "w")
+		output_file.write("")
+		output_file.close()
+
+	output_file = open(output_path, "a")
+	output_file.write("#Session {}\n".format(time.time()))
+	for event in g_ordered_key_events:
+		output_file.write("{}\n".format(event.to_json()))
+	output_file.close()
+
+
+def importRawData(data_path="typing_data.log"):
+	global g_ordered_key_events
+
+	if not (os.path.exists(data_path)):
+		raise ValueError("Path \"{}\" does not exist".format(data_path))
+
+	data_file = open(data_path, "r")
+	line = data_file.readline()
+	while(line):
+		if not ("#Session" in line):
+			try:
+				event_dict = json.loads(line.strip())
+				event_obj = keyboard.KeyboardEvent(event_dict["event_type"], event_dict["scan_code"], name=event_dict["name"], time=event_dict["time"], is_keypad=event_dict["is_keypad"])
+				g_ordered_key_events.append(event_obj)
+			except Exception as e:
+				pass
+
+		line = data_file.readline()
+
+	data_file.close()
+
+
 def main():
-	keyboard.hook(logKeyEvent)
-	captureKeystrokes()
+	importRawData()
+	#captureKeystrokeData()
+	#saveRawData()
 
 	typing_profile = analyzeKeystrokes(g_ordered_key_events)
 	
+	print("Writing keystroke profile")
 	output_file = open("typing_profile.json", "w")
 	output_file.write(json.dumps(typing_profile, indent=2, sort_keys=True))
 	output_file.close()
