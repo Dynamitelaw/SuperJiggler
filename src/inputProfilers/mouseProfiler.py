@@ -98,7 +98,7 @@ def saveMouseEvents(file_name):
 
 	#Copy previous pickle dump into backup file
 	if (os.path.exists(filepath)):
-		backup_path = "{}.bak".format(filepath)
+		backup_path = "{}_bak.gz".format(file_name)
 		shutil.copyfile(filepath, backup_path)
 		time.sleep(1)
 

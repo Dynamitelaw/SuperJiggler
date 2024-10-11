@@ -4,6 +4,8 @@ import json
 import numpy as np
 import math
 import os
+import multiprocessing as mproc
+import pickle
 
 
 g_ordered_key_events = []
@@ -63,7 +65,6 @@ def captureKeystrokeData():
 	
 
 def extractKeystrokeData(ordered_key_events):
-	print("Extracting keystroke data")
 	#Create a list of only down (press) events
 	press_events = [event for event in ordered_key_events if (event.event_type == "down")]
 	if (len(press_events) < 3):
@@ -81,7 +82,7 @@ def extractKeystrokeData(ordered_key_events):
 			key_hit_times[key.name][prev_key.name] = []
 
 		hitTime = key.time - prev_key.time
-		if (hitTime < 60):
+		if (hitTime < 5):
 			key_hit_times[key.name][prev_key.name].append(hitTime)
 
 	#Get the times each key is held for
@@ -102,7 +103,7 @@ def extractKeystrokeData(ordered_key_events):
 
 			releaseTime = event.time
 			holdTime = releaseTime - pressTime
-			if (holdTime > 0) and (holdTime < 60):
+			if (holdTime > 0) and (holdTime < 5):
 				if not (keyName in hold_time_dict):
 					hold_time_dict[keyName] = []
 
@@ -134,7 +135,7 @@ def extractKeystrokeData(ordered_key_events):
 	return data
 
 
-def fineTuneDistribution(global_average, global_std, new_data, blend_factor=5):
+def fineTuneDistribution(global_average, global_std, new_data, blend_factor=10):
 	#Fine tune the global distribution to bring it closer to the new data
 	#The more new data points there are, the more the new distribution will be affected by the new data
 
@@ -153,11 +154,30 @@ def fineTuneDistribution(global_average, global_std, new_data, blend_factor=5):
 	return fine_tuned_avg, fine_tuned_std
 
 
-def analyzeKeystrokes(ordered_key_events):
-	#Extract keystroke data
-	key_data = extractKeystrokeData(ordered_key_events)
-
+def analyzeKeystrokes(key_data, generic_profile_path=None):
 	print("Analyzing keystroke data")
+
+	#Import generic typing profile if present
+	base_on_generic = False
+	generic_profile = None
+	if not (generic_profile_path is None):
+		base_on_generic = True
+
+		generic_profile_file = open(generic_profile_path, "r")
+		generic_profile = json.load(generic_profile_file)
+		generic_profile_file.close()
+
+	generic_global_prev_delay_avg = None
+	generic_global_prev_delay_std = None
+	generic_global_hold_time_avg = None
+	generic_global_hold_time_std = None
+	if (base_on_generic):
+		generic_global_prev_delay_avg = generic_profile["overall"]["hit_delay"]["avg"]
+		generic_global_prev_delay_std = generic_profile["overall"]["hit_delay"]["std"]
+		generic_global_hold_time_avg = generic_profile["overall"]["hold_time"]["avg"]
+		generic_global_hold_time_std = generic_profile["overall"]["hold_time"]["std"]
+
+
 	#Get list of all hit delays
 	all_hit_delays = []
 	for keyName in key_data["hit_delays"]:
@@ -215,31 +235,56 @@ def analyzeKeystrokes(ordered_key_events):
 
 	#Calculate hit delay stats for each key
 	for keyName in key_stats:
-		hit_delay_stats = {}
+		key_stats[keyName]["hit_delay"] = {}
 
 		hit_delay_data = {}
 		if keyName in key_data["hit_delays"]:
 			hit_delay_data = key_data["hit_delays"][keyName]
 
-		#Get fine tuned net hit delay stats for this key
+		#Get fine tuned overall hit delay stats for this key
 		combined_delays = []
 		for prev_key in hit_delay_data:
 			combined_delays += hit_delay_data[prev_key]
 
-		key_delay_avg, key_delay_std = fineTuneDistribution(global_prev_delay_avg, global_prev_delay_std, combined_delays)
+		base_avg = global_prev_delay_avg
+		base_std = global_prev_delay_std
+		if (base_on_generic):
+			#Use scaled version of generic hit delay as base of distribution
+			generic_overall_avg = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["avg"]
+			generic_overall_std = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["std"]
+
+			base_avg = (global_prev_delay_avg/generic_global_prev_delay_avg) * generic_overall_avg
+			base_std = (global_prev_delay_std/generic_global_prev_delay_std) * generic_overall_std
+
+		key_delay_overall_avg, key_delay_overall_std = fineTuneDistribution(base_avg, base_std, combined_delays)
+		key_stats[keyName]["hit_delay"]["overall"] = {}
+		key_stats[keyName]["hit_delay"]["overall"]["avg"] = key_delay_overall_avg
+		key_stats[keyName]["hit_delay"]["overall"]["std"] = key_delay_overall_std
 
 		#Get fine tuned hit delay stats based on previous keys
+		prev_key_hit_delay_stats = {}
+
 		for prev_key in g_key_name_list:
-			prev_delay_avg = key_delay_avg
-			prev_delay_std = key_delay_std
+			prev_delay_avg = key_delay_overall_avg
+			prev_delay_std = key_delay_overall_std
+			if (base_on_generic):
+				#Use scaled version of generic prev hit delay as base of distribution
+				generic_overall_avg = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["avg"]
+				generic_overall_std = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["std"]
+
+				generic_prev_delay_avg = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["avg"]
+				generic_prev_delay_std = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["std"]
+
+				prev_delay_avg = (generic_prev_delay_avg/generic_overall_avg) * key_delay_overall_avg
+				prev_delay_std = (generic_prev_delay_std/generic_overall_std) * key_delay_overall_std
 
 			if (prev_key in hit_delay_data):
 				prev_key_data = hit_delay_data[prev_key]
 				prev_delay_avg, prev_delay_std = fineTuneDistribution(prev_delay_avg, prev_delay_std, prev_key_data)
 
-			hit_delay_stats[prev_key] = {"avg": prev_delay_avg, "std": prev_delay_std}
+			prev_key_hit_delay_stats[prev_key] = {"avg": prev_delay_avg, "std": prev_delay_std}
 
-		key_stats[keyName]["hit_delays"] = hit_delay_stats
+		key_stats[keyName]["hit_delay"]["per_prev_key"] = prev_key_hit_delay_stats
 
 	#Calculate hold time stats for each key
 	for keyName in key_stats:
@@ -250,7 +295,17 @@ def analyzeKeystrokes(ordered_key_events):
 			hold_delay_data = key_data["hold_times"][keyName]
 
 		#Get fine tuned hold time stats for this key
-		key_hold_avg, key_hold_std = fineTuneDistribution(global_hold_time_avg, global_hold_time_std, hold_delay_data)
+		base_avg = global_hold_time_avg
+		base_std = global_hold_time_std
+		if (base_on_generic):
+			#Use scaled version of generic hit delay as base of distribution
+			generic_avg = generic_profile["per_key"][keyName]["hold_time"]["avg"]
+			generic_std = generic_profile["per_key"][keyName]["hold_time"]["std"]
+
+			base_avg = (global_hold_time_avg/generic_global_hold_time_avg) * generic_avg
+			base_std = (global_hold_time_std/generic_global_hold_time_std) * generic_std
+
+		key_hold_avg, key_hold_std = fineTuneDistribution(base_avg, base_std, hold_delay_data)
 		key_stats[keyName]["hold_time"] = {"avg": key_hold_avg, "std": key_hold_std}
 
 	#Return final stats
@@ -301,16 +356,77 @@ def importRawData(data_path="typing_data.log"):
 	data_file.close()
 
 
+def extractKeystrokeDataFromFile(file_path):
+	ordered_key_events = []
+	with open(file_path, "rb") as events_pickle_file:
+		ordered_key_events = pickle.load(events_pickle_file)
+
+	key_data = extractKeystrokeData(ordered_key_events)
+
+	return key_data
+
+
+def createGenericProfile(dataset_path):
+	key_data_list = []
+	filepath_list = [os.path.join(dataset_path, i) for i in os.listdir(dataset_path)]
+	with mproc.Pool(40) as proc_pool:
+		key_data_list = proc_pool.map(extractKeystrokeDataFromFile, filepath_list)
+
+	#Create empty combined data dict
+	combined_key_data = {"backspace_sequences": [], "hit_delays": {}, "hold_times": {}}
+	for keyName in g_key_name_list:
+		combined_key_data["hold_times"][keyName] = []
+		combined_key_data["hit_delays"][keyName] = {}
+		for prev_key in g_key_name_list:
+			combined_key_data["hit_delays"][keyName][prev_key] = []
+
+	#Add per-user key data to combined dict
+	for key_data in key_data_list:
+		for keyName in key_data["hit_delays"]:
+			if not (keyName in g_key_name_list):
+				continue
+			for prev_key in key_data["hit_delays"][keyName]:
+				if not (prev_key in g_key_name_list):
+					continue
+
+				combined_key_data["hit_delays"][keyName][prev_key] += key_data["hit_delays"][keyName][prev_key]
+
+		for keyName in key_data["hold_times"]:
+			if not (keyName in g_key_name_list):
+				continue
+			combined_key_data["hold_times"][keyName] += key_data["hold_times"][keyName]
+
+		combined_key_data["backspace_sequences"] += key_data["backspace_sequences"]
+
+	#Create generic profile
+	generic_profile = analyzeKeystrokes(key_data)
+
+	output_file = open("generic_typing_profile.json", "w")
+	output_file.write(json.dumps(generic_profile, indent=2, sort_keys=True))
+	output_file.close()
+
+
 def main():
+	#Get typing data
 	importRawData()
 	#captureKeystrokeData()
 	#saveRawData()
 
-	typing_profile = analyzeKeystrokes(g_ordered_key_events)
+	#Extract keystroke data
+	key_data = extractKeystrokeData(g_ordered_key_events)
+
+	#Create typing profile
+	generic_profile_path = None
+	if (os.path.exists("generic_typing_profile.json")):
+		generic_profile_path = "generic_typing_profile.json"
+
+	typing_profile = analyzeKeystrokes(key_data, generic_profile_path=generic_profile_path)
 	
 	print("Writing keystroke profile")
-	output_file = open("typing_profile.json", "w")
+	output_file = open("bespoke_typing_profile.json", "w")
 	output_file.write(json.dumps(typing_profile, indent=2, sort_keys=True))
 	output_file.close()
 
-main()
+if __name__ == '__main__':
+	#createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
+	main()
