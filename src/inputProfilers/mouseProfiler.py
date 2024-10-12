@@ -2,6 +2,7 @@ import os
 import time
 from pynput import mouse as pmouse
 import threading
+import multiprocessing
 import pickle
 import shutil
 import bz2
@@ -9,11 +10,11 @@ import gzip
 import lzma
 
 
-g_mouseEvents = []
-g_mouseEvents_lock = threading.Lock()
-g_prevPos = (0,0)
-g_prevPos_lock = threading.Lock()
+
 g_log_save_time = 120
+g_newEventQueue = multiprocessing.Queue()
+g_prev_mouse_event_lock = threading.Lock()
+g_prev_mouse_event = None
 
 
 class MouseEvent():
@@ -58,11 +59,8 @@ class MouseEvent():
 
 
 def on_move(x, y):
-	g_mouseEvents_lock.acquire()
-	prev_event = g_mouseEvents[-1]
-	g_mouseEvents_lock.release()
-	if (prev_event.is_pos_only()):
-		if ((prev_event.x_pos == x) and (prev_event.y_pos == y)):
+	if (g_prev_mouse_event.is_pos_only()):
+		if ((g_prev_mouse_event.x_pos == x) and (g_prev_mouse_event.y_pos == y)):
 			return
 
 	event_obj = MouseEvent(x, y)
@@ -80,42 +78,43 @@ def on_scroll(x, y, dx, dy):
 
 
 def appendMouseEvent(event_obj):
-	global g_mouseEvents
+	global g_prev_mouse_event
+	global g_newEventQueue
 
-	g_mouseEvents_lock.acquire()
-	g_mouseEvents.append(event_obj)
-	g_mouseEvents_lock.release()
+	g_prev_mouse_event_lock.acquire()
+	g_prev_mouse_event = event_obj
+	g_newEventQueue.put(event_obj)
+	g_prev_mouse_event_lock.release()
 
 
-def saveMouseEvents(file_name):
-	global g_mouseEvents
+def saveMouseEvents(filename, new_event_queue):
+	#global g_mouseEvents
+	filepath = "{}.gz".format(filename)
 
-	filepath = "{}.gz".format(file_name)
+	while True:
+		time.sleep(g_log_save_time)
 
-	#Skip save if there are no new events
-	if (len(g_mouseEvents) < 2):
-		return
+		#Get new mouse events from queue
+		new_events = []
+		while (not new_event_queue.empty()):
+			new_events.append(new_event_queue.get())
 
-	#Copy previous pickle dump into backup file
-	if (os.path.exists(filepath)):
-		backup_path = "{}_bak.gz".format(file_name)
-		shutil.copyfile(filepath, backup_path)
-		time.sleep(1)
+		#Skip save if there are no new events
+		if (len(new_events) == 0):
+			continue
 
-	#Open previous pickle file if it exists
-	saved_events = []
-	if (os.path.exists(filepath)):
-		with gzip.open(filepath, "rb") as events_pickle_file:
-			saved_events = pickle.load(events_pickle_file)
+		#Open previous compressed pickle file if it exists
+		saved_events = []
+		if (os.path.exists(filepath)):
+			with gzip.open(filepath, "rb") as prev_events_pickle_file:
+				saved_events = pickle.load(prev_events_pickle_file)
 
-	#Write updated pickle with updated event list
-	saved_events = []
-	with gzip.open(filepath, "wb") as events_pickle_file:
-		g_mouseEvents_lock.acquire()
-		saved_events += g_mouseEvents
-		pickle.dump(saved_events, events_pickle_file)
-		g_mouseEvents = [g_mouseEvents[-1]]
-		g_mouseEvents_lock.release()
+		#Write updated compressed pickle with updated event list
+		print(type(saved_events))
+		print(type(saved_events[-1]))
+		with gzip.open(filepath, "wb") as events_pickle_file:
+			saved_events += new_events
+			pickle.dump(saved_events, events_pickle_file)
 
 
 def main():
@@ -128,11 +127,11 @@ def main():
 	listener = pmouse.Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll)
 	listener.start()
 
-	while (True):
-		time.sleep(g_log_save_time)
-		saveMouseEvents("mouse_data.pickle")
-
+	data_save_proc = multiprocessing.Process(target=saveMouseEvents, args=("mouse_data.pickle", g_newEventQueue))
+	data_save_proc.start()
+	data_save_proc.join()
 	listener.stop()
 
-main()
-#saveMouseEvents("mouse_log.pickle")
+
+if __name__ == '__main__':
+	main()
