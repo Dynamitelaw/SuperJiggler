@@ -90,31 +90,42 @@ def appendMouseEvent(event_obj):
 def saveMouseEvents(filename, new_event_queue):
 	#global g_mouseEvents
 	filepath = "{}.gz".format(filename)
+	backup_filepath = "{}_bak.gz".format(filename)
+	new_events = []
 
 	while True:
-		time.sleep(g_log_save_time)
+		time.sleep(g_log_save_time/2)
 
 		#Get new mouse events from queue
-		new_events = []
 		while (not new_event_queue.empty()):
 			new_events.append(new_event_queue.get())
 
 		#Skip save if there are no new events
 		if (len(new_events) == 0):
+			time.sleep(g_log_save_time/2)
 			continue
 
 		#Open previous compressed pickle file if it exists
 		saved_events = []
 		if (os.path.exists(filepath)):
 			with gzip.open(filepath, "rb") as prev_events_pickle_file:
-				saved_events = pickle.load(prev_events_pickle_file)
+				try:
+					saved_events = pickle.load(prev_events_pickle_file)
+				except:
+					shutil.copyfile(backup_filepath, filepath)  #Override corrupted file with backup
+					continue
 
 		#Write updated compressed pickle with updated event list
-		print(type(saved_events))
-		print(type(saved_events[-1]))
 		with gzip.open(filepath, "wb") as events_pickle_file:
 			saved_events += new_events
 			pickle.dump(saved_events, events_pickle_file)
+
+		#Update backup file
+		time.sleep(g_log_save_time/2)
+		shutil.copyfile(filepath, backup_filepath)
+
+		#Clear new events list
+		new_events = []
 
 
 def main():
