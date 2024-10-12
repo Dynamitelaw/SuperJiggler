@@ -6,6 +6,8 @@ import math
 import os
 import multiprocessing as mproc
 import pickle
+from scipy import stats as scistats
+import matplotlib.pyplot as plt
 
 
 g_ordered_key_events = []
@@ -135,23 +137,23 @@ def extractKeystrokeData(ordered_key_events):
 	return data
 
 
-def fineTuneDistribution(global_average, global_std, new_data, blend_factor=10):
+def fineTuneAlphaDistribution(global_alpha, global_loc, global_scale, new_data, blend_factor=25):
 	#Fine tune the global distribution to bring it closer to the new data
 	#The more new data points there are, the more the new distribution will be affected by the new data
 
-	if (len(new_data) < 2):
-		return global_average, global_std
+	if (len(new_data) < 10):
+		return global_alpha, global_loc, global_scale
 
-	new_avg = np.average(new_data)
-	new_std = np.std(new_data)
+	new_alpha, new_loc, new_scale = scistats.alpha.fit(new_data)
 	num_new_data_points = len(new_data)
 
 	new_ratio = 1 - (1/(2**(num_new_data_points/blend_factor)))
 
-	fine_tuned_avg = (global_average*(1-new_ratio)) + (new_avg*new_ratio)
-	fine_tuned_std = (global_std*(1-new_ratio)) + (new_avg*new_std)
+	fine_tuned_alpha = (global_alpha*(1-new_ratio)) + (new_alpha*new_ratio)
+	fine_tuned_loc = (global_loc*(1-new_ratio)) + (new_loc*new_ratio)
+	fine_tuned_scale = (global_scale*(1-new_ratio)) + (new_scale*new_ratio)
 
-	return fine_tuned_avg, fine_tuned_std
+	return fine_tuned_alpha, fine_tuned_loc, fine_tuned_scale
 
 
 def analyzeKeystrokes(key_data, generic_profile_path=None):
@@ -167,15 +169,19 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 		generic_profile = json.load(generic_profile_file)
 		generic_profile_file.close()
 
-	generic_global_prev_delay_avg = None
-	generic_global_prev_delay_std = None
-	generic_global_hold_time_avg = None
-	generic_global_hold_time_std = None
+	generic_global_prev_delay_alpha = None
+	generic_global_prev_delay_loc = None
+	generic_global_prev_delay_scale = None
+	generic_global_hold_time_alpha = None
+	generic_global_hold_time_loc = None
+	generic_global_hold_time_scale = None
 	if (base_on_generic):
-		generic_global_prev_delay_avg = generic_profile["overall"]["hit_delay"]["avg"]
-		generic_global_prev_delay_std = generic_profile["overall"]["hit_delay"]["std"]
-		generic_global_hold_time_avg = generic_profile["overall"]["hold_time"]["avg"]
-		generic_global_hold_time_std = generic_profile["overall"]["hold_time"]["std"]
+		generic_global_prev_delay_alpha = generic_profile["overall"]["hit_delay"]["alpha"]
+		generic_global_prev_delay_loc = generic_profile["overall"]["hit_delay"]["loc"]
+		generic_global_prev_delay_scale = generic_profile["overall"]["hit_delay"]["scale"]
+		generic_global_hold_time_alpha = generic_profile["overall"]["hold_time"]["alpha"]
+		generic_global_hold_time_loc = generic_profile["overall"]["hold_time"]["loc"]
+		generic_global_hold_time_scale = generic_profile["overall"]["hold_time"]["scale"]
 
 
 	#Get list of all hit delays
@@ -184,18 +190,18 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 		for prev_key in key_data["hit_delays"][keyName]:
 			all_hit_delays += key_data["hit_delays"][keyName][prev_key]
 
-	#Remove upper and lower 5% of hit delay data points
+	#Remove upper and lower 3% of hit delay data points
 	all_hit_delays.sort()
-	lower_bound_indx = math.ceil(len(all_hit_delays)*0.05)
-	upper_bound_indx = math.floor(len(all_hit_delays)*0.95)
+	lower_bound_indx = math.ceil(len(all_hit_delays)*0.03)
+	upper_bound_indx = math.floor(len(all_hit_delays)*0.97)
 	if (upper_bound_indx-lower_bound_indx < 3):
 		raise ValueError("Insufficient key hit delay data")
 
 	all_hit_delays = all_hit_delays[lower_bound_indx:upper_bound_indx]
 
-	#Calculate mean and standard deviation of hit delays
-	global_prev_delay_avg = np.average(all_hit_delays)
-	global_prev_delay_std = np.std(all_hit_delays)
+	#Fit alpha distribution params for hit delays
+	global_prev_delay_alpha, global_prev_delay_loc, global_prev_delay_scale = scistats.alpha.fit(all_hit_delays)
+
 
 	#Get list of all hold times
 	all_hold_times = []
@@ -203,18 +209,18 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 		if (keyName != "shift"):
 			all_hold_times += key_data["hold_times"][keyName]
 
-	#Remove upper and lower 5% of hold time data points
+	#Remove upper and lower 3% of hold time data points
 	all_hold_times.sort()
-	lower_bound_indx = math.ceil(len(all_hold_times)*0.05)
-	upper_bound_indx = math.floor(len(all_hold_times)*0.95)
+	lower_bound_indx = math.ceil(len(all_hold_times)*0.03)
+	upper_bound_indx = math.floor(len(all_hold_times)*0.97)
 	if (upper_bound_indx-lower_bound_indx < 3):
 		raise ValueError("Insufficient key hold time data")
 
 	all_hold_times = all_hold_times[lower_bound_indx:upper_bound_indx]
 
-	#Calculate mean and standard deviation of hold times
-	global_hold_time_avg = np.average(all_hold_times)
-	global_hold_time_std = np.std(all_hold_times)
+	#Fit alpha distribution params for hold times
+	global_hold_time_alpha, global_hold_time_loc, global_hold_time_scale = scistats.alpha.fit(all_hold_times)
+
 
 	#Calculate error rate and overshoot stats
 	num_backspace = 0
@@ -222,7 +228,7 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 		num_backspace = len(key_data["hold_times"]["backspace"])
 	error_rate = len(key_data["backspace_sequences"])/(len(all_hold_times)-num_backspace)
 
-	error_overshoot_len_avg = (0.1/global_prev_delay_avg)*3
+	error_overshoot_len_avg = 2
 	error_overshoot_len_std = 1
 	if (len(key_data["backspace_sequences"]) > 2):
 		error_overshoot_len_avg = np.average(key_data["backspace_sequences"])
@@ -246,43 +252,52 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 		for prev_key in hit_delay_data:
 			combined_delays += hit_delay_data[prev_key]
 
-		base_avg = global_prev_delay_avg
-		base_std = global_prev_delay_std
+		base_alpha = global_prev_delay_alpha
+		base_loc = global_prev_delay_loc
+		base_scale = global_prev_delay_scale
 		if (base_on_generic):
 			#Use scaled version of generic hit delay as base of distribution
-			generic_overall_avg = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["avg"]
-			generic_overall_std = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["std"]
+			generic_overall_alpha = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["alpha"]
+			generic_overall_loc = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["loc"]
+			generic_overall_scale = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["scale"]
 
-			base_avg = (global_prev_delay_avg/generic_global_prev_delay_avg) * generic_overall_avg
-			base_std = (global_prev_delay_std/generic_global_prev_delay_std) * generic_overall_std
+			base_alpha = (global_prev_delay_alpha/generic_global_prev_delay_alpha) * generic_overall_alpha
+			base_loc = (global_prev_delay_loc/generic_global_prev_delay_loc) * generic_overall_loc
+			base_scale = (global_prev_delay_scale/generic_global_prev_delay_scale) * generic_overall_scale
 
-		key_delay_overall_avg, key_delay_overall_std = fineTuneDistribution(base_avg, base_std, combined_delays)
+		key_delay_overall_alpha, key_delay_overall_loc, key_delay_overall_scale = fineTuneAlphaDistribution(base_alpha, base_loc, base_scale, combined_delays)
 		key_stats[keyName]["hit_delay"]["overall"] = {}
-		key_stats[keyName]["hit_delay"]["overall"]["avg"] = key_delay_overall_avg
-		key_stats[keyName]["hit_delay"]["overall"]["std"] = key_delay_overall_std
+		key_stats[keyName]["hit_delay"]["overall"]["alpha"] = key_delay_overall_alpha
+		key_stats[keyName]["hit_delay"]["overall"]["loc"] = key_delay_overall_loc
+		key_stats[keyName]["hit_delay"]["overall"]["scale"] = key_delay_overall_scale
 
 		#Get fine tuned hit delay stats based on previous keys
 		prev_key_hit_delay_stats = {}
 
 		for prev_key in g_key_name_list:
-			prev_delay_avg = key_delay_overall_avg
-			prev_delay_std = key_delay_overall_std
+			prev_delay_alpa = key_delay_overall_alpha
+			prev_delay_loc = key_delay_overall_loc
+			prev_delay_scale = key_delay_overall_scale
+
 			if (base_on_generic):
 				#Use scaled version of generic prev hit delay as base of distribution
-				generic_overall_avg = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["avg"]
-				generic_overall_std = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["std"]
+				generic_overall_alpha = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["alpha"]
+				generic_overall_loc = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["loc"]
+				generic_overall_scale = generic_profile["per_key"][keyName]["hit_delay"]["overall"]["scale"]
 
-				generic_prev_delay_avg = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["avg"]
-				generic_prev_delay_std = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["std"]
+				generic_prev_delay_alpha = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["alpha"]
+				generic_prev_delay_loc = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["loc"]
+				generic_prev_delay_scale = generic_profile["per_key"][keyName]["hit_delay"]["per_prev_key"][prev_key]["scale"]
 
-				prev_delay_avg = (generic_prev_delay_avg/generic_overall_avg) * key_delay_overall_avg
-				prev_delay_std = (generic_prev_delay_std/generic_overall_std) * key_delay_overall_std
+				prev_delay_alpha = (generic_prev_delay_alpha/generic_overall_alpha) * key_delay_overall_alpha
+				prev_delay_loc = (generic_prev_delay_loc/generic_overall_loc) * key_delay_overall_loc
+				prev_delay_scale = (generic_prev_delay_scale/generic_overall_scale) * key_delay_overall_scale
 
 			if (prev_key in hit_delay_data):
 				prev_key_data = hit_delay_data[prev_key]
-				prev_delay_avg, prev_delay_std = fineTuneDistribution(prev_delay_avg, prev_delay_std, prev_key_data)
+				prev_delay_alpa, prev_delay_loc, prev_delay_scale = fineTuneAlphaDistribution(prev_delay_alpa, prev_delay_loc, prev_delay_scale, prev_key_data)
 
-			prev_key_hit_delay_stats[prev_key] = {"avg": prev_delay_avg, "std": prev_delay_std}
+			prev_key_hit_delay_stats[prev_key] = {"alpha": prev_delay_alpa, "loc": prev_delay_loc, "scale": prev_delay_scale}
 
 		key_stats[keyName]["hit_delay"]["per_prev_key"] = prev_key_hit_delay_stats
 
@@ -295,30 +310,33 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 			hold_delay_data = key_data["hold_times"][keyName]
 
 		#Get fine tuned hold time stats for this key
-		base_avg = global_hold_time_avg
-		base_std = global_hold_time_std
+		base_alpha = global_hold_time_alpha
+		base_loc = global_hold_time_loc
+		base_scale = global_hold_time_scale
 		if (base_on_generic):
 			#Use scaled version of generic hit delay as base of distribution
-			generic_avg = generic_profile["per_key"][keyName]["hold_time"]["avg"]
-			generic_std = generic_profile["per_key"][keyName]["hold_time"]["std"]
+			generic_alpha = generic_profile["per_key"][keyName]["hold_time"]["alpha"]
+			generic_loc = generic_profile["per_key"][keyName]["hold_time"]["loc"]
+			generic_scale = generic_profile["per_key"][keyName]["hold_time"]["scale"]
 
-			base_avg = (global_hold_time_avg/generic_global_hold_time_avg) * generic_avg
-			base_std = (global_hold_time_std/generic_global_hold_time_std) * generic_std
+			base_alpha = (global_hold_time_alpha/generic_global_hold_time_alpha) * generic_alpha
+			base_loc = (global_hold_time_loc/generic_global_hold_time_loc) * generic_loc
+			base_scale = (global_hold_time_scale/generic_global_hold_time_scale) * generic_scale
 
-		key_hold_avg, key_hold_std = fineTuneDistribution(base_avg, base_std, hold_delay_data)
-		key_stats[keyName]["hold_time"] = {"avg": key_hold_avg, "std": key_hold_std}
+		key_hold_alpha, key_hold_loc, key_hold_scale = fineTuneAlphaDistribution(base_alpha, base_loc, base_scale, hold_delay_data)
+		key_stats[keyName]["hold_time"] = {"alpha": key_hold_alpha, "loc": key_hold_loc, "scale": key_hold_scale}
 
 	#Return final stats
-	stats = {}
-	stats["overall"] = {
-		"hit_delay": {"avg": global_prev_delay_avg, "std": global_prev_delay_std},
-		"hold_time": {"avg": global_hold_time_avg, "std": global_hold_time_std},
+	final_stats = {}
+	final_stats["overall"] = {
+		"hit_delay": {"alpha": global_prev_delay_alpha, "loc": global_prev_delay_loc, "scale": global_prev_delay_scale},
+		"hold_time": {"alpha": global_hold_time_alpha, "loc": global_hold_time_loc, "scale": global_hold_time_scale},
 		"error_rate": error_rate,
 		"error_overshoot_len": {"avg": error_overshoot_len_avg, "std": error_overshoot_len_std}
 	}
-	stats["per_key"] = key_stats
+	final_stats["per_key"] = key_stats
 
-	return stats
+	return final_stats
 
 
 def saveRawData(output_path="typing_data.log"):
@@ -430,3 +448,4 @@ def main():
 if __name__ == '__main__':
 	#createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
 	main()
+
