@@ -10,18 +10,9 @@ from scipy.interpolate import CubicSpline
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
+import pickle
 
 
-def cartesianToPolar(x, y):
-	rho = np.sqrt(x**2 + y**2)
-	phi = np.arctan2(y, x)
-
-	return rho, phi
-
-def polarToCartesian(rho, phi):
-	x = rho * np.cos(phi)
-	y = rho * np.sin(phi)
-	return(x, y)
 
 def cartesianDistance(p1_x, p1_y, p2_x, p2_y):
 	return np.sqrt((p1_x - p2_x)**2 + (p1_y - p2_y)**2)
@@ -49,16 +40,10 @@ class MouseDataPoint:
 		self.x_velocity = None
 		self.y_velocity = None
 		self.velocity_magnitude = None
-		self.velocity_rho = None
-		self.velocity_phi = None
-		self.velocity_end_phi = None
 
 		self.x_acceleration = None
 		self.y_acceleration = None
 		self.acceleration_magnitude = None
-		self.acceleration_rho = None
-		self.acceleration_phi = None
-		self.acceleration_end_phi = None
 
 		self.idle = False
 
@@ -66,18 +51,14 @@ class MouseDataPoint:
 
 		self.path_start_x = None
 		self.path_start_y = None
-		self.path_start_rho = None
-		self.path_start_phi = None
 
 		self.path_end_x = None
 		self.path_end_y = None
-		self.path_end_rho = None
-		self.path_end_phi = None
+
 		self.straight_path_length = None
 		self.end_start_angle = None
 		self.end_dist = None
 
-		self.curvature = 0
 
 	def calcPathData(self, start_x, start_y, end_x, end_y):
 		self.path_start_x = start_x
@@ -93,59 +74,16 @@ class MouseDataPoint:
 		self.straight_path_length = np.sqrt((end_x-start_x)**2 + (end_y-start_y)**2)
 		self.end_dist = np.sqrt((dx_end)**2 + (dy_end)**2)
 		self.start_dist = np.sqrt((dx_start)**2 + (dy_start)**2)
-
-		self.path_start_rho, self.path_start_phi = cartesianToPolar(dx_start, dy_start)
-		self.path_end_rho, self.path_end_phi = cartesianToPolar(dx_end, dy_end)
-
-		self.velocity_rho, self.velocity_phi = cartesianToPolar(self.x_velocity, self.y_velocity)
-		self.acceleration_rho, self.acceleration_phi = cartesianToPolar(self.x_acceleration, self.y_acceleration)
-
 		
 		self.path_progress = 1-(self.end_dist/self.straight_path_length)
 		if (self.path_progress < 0):
-			self.path_progress = self.path_end_rho / (self.path_end_rho+self.path_start_rho)
+			self.path_progress = self.end_dist / (self.end_dist+self.start_dist)
 
 		if (self.end_dist == 0) or (self.start_dist == 0):
 			self.end_start_angle = 180
 		else:
 			self.end_start_angle = np.degrees(calcAngle([start_x,start_y], [self.x_pos,self.y_pos], [end_x,end_y]))
 		self.straight_path_deviation = (180-self.end_start_angle)/180
-
-		self.velocity_end_phi = self.velocity_phi - self.path_end_phi
-		self.acceleration_end_phi = self.acceleration_phi - self.path_end_phi
-
-
-
-def calcMengerCurvature(p1, p2, p3):
-	"""Calculates the Menger curvature of three points.
-
-	Args:
-	    p1, p2, p3: 2D or 3D points represented as tuples or lists.
-
-	Returns:
-	    The Menger curvature (reciprocal of the circumradius).
-	"""
-
-	x1, y1 = p1.x_pos, p1.y_pos
-	x2, y2 = p2.x_pos, p2.y_pos
-	x3, y3 = p3.x_pos, p3.y_pos
-
-	# Calculate the area of the triangle formed by the three points
-	area = 0.5 * abs(x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
-
-	# Calculate the side lengths of the triangle
-	a = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-	b = np.sqrt((x3 - x2) ** 2 + (y3 - y2) ** 2)
-	c = np.sqrt((x1 - x3) ** 2 + (y1 - y3) ** 2)
-
-	# If the area is zero, the points are collinear, and the curvature is zero
-	if area == 0:
-	    return 0
-
-	# Calculate the Menger curvature
-	curvature = (4 * area) / (a * b * c)
-
-	return curvature
 
 
 def calcAngle(p_a, p_b, p_c):
@@ -197,14 +135,6 @@ def populateAccelerationData(data_points, smoothing_width=50):
 		accel_data_points.append(data_point_obj)
 
 	return accel_data_points
-
-
-def populateCurvatureData(data_points, smoothing_width=20):
-	for indx in range(smoothing_width, len(data_points)-smoothing_width):
-		curvature = calcMengerCurvature(data_points[indx-smoothing_width], data_points[indx], data_points[indx+smoothing_width])
-		data_points[indx].curvature = curvature
-
-	return data_points
 
 
 def populateIdleData(data_points, smoothing_width=6, velocity_cuttoff=150, acceleration_cuttoff=15000):  #TODO: Scale velocity cuttoff
@@ -302,7 +232,7 @@ def populatePathData(data_points):
 def filterPaths(data_points, target_path_type):
 	filtered_data = []
 	for data_point_obj in data_points:
-		if (data_point_obj.path_type == target_type):
+		if (data_point_obj.path_type == target_path_type):
 			filtered_data.append(data_point_obj)
 
 	return filtered_data
@@ -350,6 +280,8 @@ class MousePathGenerator(object):
 		self.target_x = 0
 		self.target_y = 0
 
+		self.target_start_angle = 0
+
 		self.current_x = 0
 		self.current_y = 0
 
@@ -363,12 +295,17 @@ class MousePathGenerator(object):
 		self.wind_v_dampening = np.sqrt(3)
 		self.wind_a_dampening = np.sqrt(5)
 
-		self.GRAV_0 = 9
-		self.WIND_0 = 100
-		self.M_0 = 30
-		self.D_0 = 12
+		self.GRAV_0 = 800
+		self.WIND_0 = 4000
 
 		self.last_iter_time = 0
+		self.path_progress = 0
+
+		mouse_model_path = "mouse_profile.pickle"
+		self.velocity_model = None
+		with open(mouse_model_path, "rb") as mouse_model_pickle_file:
+			self.velocity_model = pickle.load(mouse_model_pickle_file)
+		self.poly = PolynomialFeatures(degree=3)
 
 	def startNewPath(self, start_x, start_y, target_x, target_y):
 		self.start_x = start_x
@@ -388,41 +325,47 @@ class MousePathGenerator(object):
 		start_dist = cartesianDistance(self.current_x, self.current_y, self.start_x, self.start_y)
 		target_dist = cartesianDistance(self.current_x, self.current_y, self.target_x, self.target_y)
 
-		path_progress = 1-(target_dist/self.path_length)
-		target_start_angle = np.degrees(calcAngle([1,0], [0,0], [1,40]))
-		if (target_start_angle < 0):
-			raise ValueError("Nergative angle!")
-		path_deviation = (180-target_start_angle)/180
+		self.path_progress = 1-(target_dist/self.path_length)
+		if (self.path_progress < 0):
+			self.path_progress = target_dist/(target_dist+start_dist)
 
-		W_mag = min(self.WIND_0*(1-path_deviation), target_dist)
+		if (start_dist == 0) or (target_dist == 0):
+			self.target_start_angle = 180
+		else:
+			self.target_start_angle = np.degrees(calcAngle([self.start_x,self.start_y], [self.current_x,self.current_y], [self.target_x,self.target_y]))
+
+		self.path_deviation = (180-self.target_start_angle)/180
+
+		W_mag = min(self.WIND_0*(1-self.path_deviation), target_dist*100)
 		self.wind_x = self.wind_x/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
 		self.wind_y = self.wind_y/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
-		'''
-		if target_dist >= self.D_0:
-			self.wind_x = self.wind_x/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
-			self.wind_y = self.wind_y/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
-		else:
-			self.wind_x = self.wind_x/self.wind_v_dampening
-			self.wind_y = self.wind_y/self.wind_v_dampening
-			if self.M_0 < 3:
-				self.M_0 = np.random.random()*3 + 3
-			else:
-				self.M_0 = self.M_0/np.sqrt(5)
-		'''
-		grav_x = (self.GRAV_0*(self.target_x-self.current_x))/(target_dist*(1-path_progress)*(1-path_deviation))
-		grav_y = (self.GRAV_0*(self.target_y-self.current_y))/(target_dist*(1-path_progress)*(1-path_deviation))
+
+		grav_x = (self.GRAV_0*(self.target_x-self.current_x))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
+		grav_y = (self.GRAV_0*(self.target_y-self.current_y))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
+
 		self.v_x += self.wind_x + grav_x
 		self.v_y += self.wind_y + grav_y
+
 		v_mag = np.hypot(self.v_x, self.v_y)
-		v_max = 50*(1.25 - (4*(0.5-path_progress)**2)) + 20*path_deviation
-		#v_max = self.M_0
+		v_max = self.velocity_model.predict(self.poly.fit_transform([[self.path_progress, self.target_start_angle, self.path_length, self.path_deviation]]))[0]
+		if (v_max < 100):
+			v_max = 100
+
 		if v_mag > v_max:
 			v_clip = v_max/2 + np.random.random()*v_max/2
 			self.v_x = (self.v_x/v_mag) * v_clip
 			self.v_y = (self.v_y/v_mag) * v_clip
 
-		self.current_x += self.v_x
-		self.current_y += self.v_y
+		if (self.last_iter_time == 0):
+			self.last_iter_time = time.time()
+		else:
+			current_time = time.time()
+			time_delta = current_time - self.last_iter_time
+
+			self.current_x += self.v_x*time_delta
+			self.current_y += self.v_y*time_delta
+
+			self.last_iter_time = current_time
 
 		return self.current_x, self.current_y
 
@@ -434,8 +377,9 @@ def genMousePath(start_x, start_y, target_x, target_y):
 	points = []
 	pathGen = MousePathGenerator()
 	pathGen.startNewPath(start_x, start_y, target_x, target_y)
-	for i in range(200):
+	for i in range(20000):
 		points.append((current_x, current_y))
+		time.sleep(0.001)
 		target_dist = np.sqrt((current_x-target_x)**2 + (current_y-target_y)**2)
 		if (target_dist < 15):
 			break
@@ -454,33 +398,53 @@ def main():
 		mouse_events = pickle.load(prev_events_pickle_file)
 
 	#Calculate datapoints from mouse events
-	sample_size = 80000
-	data_points = getVelocityDatapoints(mouse_events[0:sample_size])
+	sample_size = 8000000
+	#data_points = getVelocityDatapoints(mouse_events[0:sample_size])
+	data_points = getVelocityDatapoints(mouse_events)
 	data_points = populateAccelerationData(data_points)
-	data_points = populateCurvatureData(data_points)
 	data_points = populateIdleData(data_points)
 	data_points = populatePathData(data_points)
 
 	#Only fit movement model on PRE_CLICK paths
 	data_points = filterPaths(data_points, MousePathType.PRE_CLICK)
-	
 
-	# Generate polynomial features up to degree 2
-	x_to_fit = np.array([[0.5-i.path_progress, i.end_start_angle, i.straight_path_length, i.straight_path_deviation] for i in data_points])
-	y_to_fit = np.array([i.velocity_magnitude for i in data_points])
-	poly = PolynomialFeatures(degree=2)
-	X_poly = poly.fit_transform(x_to_fit)
+	#Remove upper 1% of velocity data points
+	velocities = [i.velocity_magnitude for i in data_points]
+	velocities.sort()
+	max_v_indx = math.floor(len(velocities)*0.99)
+	max_velocity = velocities[max_v_indx]
+	data_points = [i for i in data_points if (i.velocity_magnitude < max_velocity)]
+
+	print(len(data_points))
+	
+	# Generate polynomial features for velocity model fit
+	data_in = np.array([[i.path_progress, i.end_start_angle, i.straight_path_length, i.straight_path_deviation] for i in data_points])
+	velocity_to_fit = np.array([i.velocity_magnitude for i in data_points])
+	poly = PolynomialFeatures(degree=3)
+	data_in_poly = poly.fit_transform(data_in)
 
 	# Fit the model
 	model = LinearRegression()
-	model.fit(X_poly, y_to_fit)
+	model.fit(data_in_poly, velocity_to_fit)
+
+	#Save model to file
+	mouse_model_path = "mouse_profile.pickle"
+	with open(mouse_model_path, "wb") as mouse_model_pickle_file:
+		pickle.dump(model, mouse_model_pickle_file)
 
 	# Make predictions
-	y_pred = model.predict(X_poly)
+	l_model = None
+	with open(mouse_model_path, "rb") as mouse_model_pickle_file:
+		l_model = pickle.load(mouse_model_pickle_file)
+
+	y_pred = l_model.predict(data_in_poly)
+
+	k_pred = l_model.predict(poly.fit_transform([[0.5, 180, 700, 0]]))
+	print(k_pred)
 
 	# Calculate the R-squared score
-	r2 = r2_score(y_to_fit, y_pred)
-	diff = y_to_fit - y_pred
+	r2 = r2_score(velocity_to_fit, y_pred)
+	diff = velocity_to_fit - y_pred
 	plt.hist(diff, bins=20)
 	plt.show() 
 
@@ -488,14 +452,14 @@ def main():
 	print("R-squared:", r2)
 
 	# Extract coefficients and intercept
-	coefficients = model.coef_
-	intercept = model.intercept_
+	coefficients = l_model.coef_
+	intercept = l_model.intercept_
 
 	# Construct and print the equation
 	equation = f"v_mag = {intercept:.2f} + {coefficients[0]:.2f} * x1 + {coefficients[1]:.2f} * x2"
 	print(coefficients)
 	#print(equation)
-	#sys.exit()
+	sys.exit()
 
 	# fig, axs = plt.subplots(2)
 	# fig.suptitle('Vertically stacked subplots')
@@ -504,6 +468,10 @@ def main():
 
 	# plt.scatter(path_progress, curvature)
 
+	path_length = np.array([i.straight_path_length for i in data_points])
+	path_progress = np.array([i.path_progress for i in data_points])
+	v_mag = np.array([i.velocity_magnitude for i in data_points])
+
 	fig = plt.figure(figsize=(12, 12))
 	ax = fig.add_subplot(projection='3d')
 	ax.scatter(path_length, path_progress, y_pred, color="r")
@@ -511,57 +479,6 @@ def main():
 	ax.set_xlabel("path_length")
 	ax.set_ylabel("path_progress")
 	ax.set_zlabel("y_pred")
-	#plt.show()
-
-	colors = ["blue", "orange", "green", "red", "purple", "brown", "pink", "gray", "olive", "cyan"]
-	color_indx = 0
-	for path in paths:
-		start_x = path[0].x_pos
-		start_y = path[0].y_pos
-		x = np.array([i.x_pos-start_x for i in path])
-		y = np.array([i.y_pos-start_y for i in path])
-		#plt.plot(x, y, "tab:{}".format(colors[color_indx]))
-		color_indx = (color_indx+1)%(len(colors))
-
-	#plt.show()
-	sys.exit()
-
-	fig, ax = plt.subplots(2)
-	t = np.linspace(0, 3, 40)
-	g = -9.81
-	v0 = 12
-	z = g * t**2 / 2 + v0 * t
-
-	v02 = 5
-	z2 = g * t**2 / 2 + v02 * t
-
-	data_points = paths[4] #2
-	path_x = np.array([i.x_pos for i in data_points])
-	path_y = np.array([i.y_pos for i in data_points])
-	path_plot = ax[0].plot(path_x, path_y)
-	current_data = data_points[0]
-	current_pos = ax[0].scatter([current_data.x_pos], [current_data.y_pos])
-
-	telemetry_scale = 10000
-	current_v_telemetry = ax[1].quiver([0, 0], current_data.x_velocity, current_data.y_velocity)
-	current_a_telemetry = ax[1].quiver([0, 0], current_data.x_acceleration, current_data.y_acceleration)
-	ax[1].set_xlim(-1*telemetry_scale, telemetry_scale)
-	ax[1].set_ylim(-1*telemetry_scale, telemetry_scale)
-	#ax.legend()
-
-	plt.quiver([0, 0, 0], [0, 0, 0], [1, -2, 4], [1, 2, -7], angles='xy', scale_units='xy', scale=1)
-	def update(frame):
-		#current_pos.set_xdata([data_points[frame].x_pos])
-		#current_pos.set_ydata([data_points[frame].y_pos])
-		current_data = data_points[frame]
-		data = np.hstack(([current_data.x_pos], [current_data.y_pos]))
-		current_pos.set_offsets(data)
-		current_v_telemetry.set_UVC(current_data.x_velocity, current_data.y_velocity)
-		current_a_telemetry.set_UVC(current_data.x_acceleration, current_data.y_acceleration)
-		return (path_plot, current_pos, current_v_telemetry, current_a_telemetry)
-
-
-	ani = animation.FuncAnimation(fig=fig, func=update, frames=len(data_points), interval=5)
 	plt.show()
 
 main()
@@ -577,29 +494,25 @@ main()
 # y_pos = [i[2] for i in points]
 #https://ben.land/post/2021/04/25/windmouse-human-mouse-movement/
 
-angle = calcAngle([1,0], [0,0], [1,40])
-print(np.degrees(angle))
-#sys.exit()
+while True:
+	points = genMousePath(200,300,1300,1400)
 
-#cs, points = generateSplinePath(0,0,10,10)
-points = genMousePath(1500,1500,200,300)
+	x_pos = [i[0] for i in points]
+	y_pos = [i[1] for i in points]
 
-x_pos = [i[0] for i in points]
-y_pos = [i[1] for i in points]
+	t = []
+	v = []
+	for indx in range(1,len(points)):
+		t.append(indx*0.001)
+		v_x = x_pos[indx] - x_pos[indx-1]
+		v_y = y_pos[indx] - y_pos[indx-1]
+		v_mag = np.sqrt(v_x**2 + v_y**2)/0.001
+		v.append(v_mag)
 
-t = []
-v = []
-for indx in range(1,len(points)):
-	t.append(indx)
-	v_x = x_pos[indx] - x_pos[indx-1]
-	v_y = y_pos[indx] - y_pos[indx-1]
-	v_mag = np.sqrt(v_x**2 + v_y**2)
-	v.append(v_mag)
-
-fig, ax = plt.subplots(2)
-ax[0].plot(x_pos, y_pos)
-ax[1].plot(t, v)
-plt.show()
+	fig, ax = plt.subplots(2)
+	ax[0].plot(x_pos, y_pos)
+	ax[1].plot(t, v)
+	plt.show()
 
 
 '''
