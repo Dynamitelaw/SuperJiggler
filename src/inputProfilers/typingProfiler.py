@@ -447,5 +447,17 @@ def main():
 
 if __name__ == '__main__':
 	#createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
-	main()
+	#main()
+
+	alpha = 2.666911108793882
+	loc = -0.04445220243471104
+	scale = 0.5015068298925687
+
+	startTime = time.time()
+	random_samples = scistats.alpha.rvs(alpha, loc, scale, size=10000)
+	random_samples = [i for i in random_samples if i < 1.5]
+	elapsedTime = time.time() - startTime
+	#print(random_samples[0])
+	print(elapsedTime)
+	
 
