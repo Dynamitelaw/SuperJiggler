@@ -91,6 +91,10 @@ def calcAngle(p_a, p_b, p_c):
 	bc = [p_c[i] - p_b[i] for i in range(len(p_c))]
 
 	cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+	if (cosine_angle < -1):
+		cosine_angle = -0.99
+	if (cosine_angle > 1):
+		cosine_angle = 0.99
 	angle = np.arccos(cosine_angle)
 
 	return angle
@@ -238,39 +242,6 @@ def filterPaths(data_points, target_path_type):
 	return filtered_data
 		
 
-def getNormalSample(mean, std, onlyPositive=True):
-	'''
-	Returns a single sample from a normal distribution
-	'''
-	sample = np.random.normal(mean, std, 1)[0]
-	if (onlyPositive):
-		while (sample < 0):
-			sample = np.random.normal(mean, std, 1)[0]
-	return sample
-
-
-def getNextMousePosition(start_x, start_y, target_x, target_y, current_x, current_y, current_vx, current_vy):
-	start_dist = np.sqrt((current_x-start_x)**2 + (current_y-start_y)**2)
-	target_dist, target_phi = cartesianToPolar((target_x-current_x), (target_y-current_y))
-
-	path_progress = start_dist/(start_dist+target_dist)
-	path_length = np.sqrt((target_x-start_x)**2 + (target_y-start_y)**2)
-
-	scale_factor = 0.1
-	a_mag = (path_length -2*path_length*path_progress)*scale_factor
-	print((path_progress, a_mag))
-	a_mag = a_mag*getNormalSample(1, 0.01)
-	a_phi = target_phi*getNormalSample(1, 0.03)
-	a_x, a_y = polarToCartesian(a_mag, a_phi)
-
-	next_vx = current_vx + a_x
-	next_vy = current_vy + a_y
-	next_x = current_x+next_vx
-	next_y = current_y+next_vy
-
-	return next_x, next_y, next_vx, next_vy
-
-
 class MousePathGenerator(object):
 	"""docstring for ClassName"""
 	def __init__(self):
@@ -296,16 +267,21 @@ class MousePathGenerator(object):
 		self.wind_a_dampening = np.sqrt(5)
 
 		self.GRAV_0 = 800
-		self.WIND_0 = 4000
+		#self.WIND_0 = 4000
+		self.WIND_0 = 3000
 
 		self.last_iter_time = 0
 		self.path_progress = 0
 
-		mouse_model_path = "mouse_profile.pickle"
-		self.velocity_model = None
-		with open(mouse_model_path, "rb") as mouse_model_pickle_file:
-			self.velocity_model = pickle.load(mouse_model_pickle_file)
+		mouse_profile_path = "mouse_profile.pickle"
+		with open(mouse_profile_path, "rb") as mouse_profile_pickle_file:
+			mouse_profile = pickle.load(mouse_profile_pickle_file)
+			self.velocity_model = mouse_profile["model"]
+			self.v_diff_ratio_avg = mouse_profile["v_diff_ratio_avg"]
+			self.v_diff_ratio_std = mouse_profile["v_diff_ratio_std"]
+	
 		self.poly = PolynomialFeatures(degree=3)
+		self.v_diff_ratio = 0
 
 	def startNewPath(self, start_x, start_y, target_x, target_y):
 		self.start_x = start_x
@@ -320,6 +296,8 @@ class MousePathGenerator(object):
 
 		self.current_x = start_x
 		self.current_y = start_y
+
+		self.v_diff_ratio = max(np.random.normal(self.v_diff_ratio_avg, self.v_diff_ratio_std, 1)[0], -0.8)
 
 	def getNextPosition(self):
 		start_dist = cartesianDistance(self.current_x, self.current_y, self.start_x, self.start_y)
@@ -348,8 +326,9 @@ class MousePathGenerator(object):
 
 		v_mag = np.hypot(self.v_x, self.v_y)
 		v_max = self.velocity_model.predict(self.poly.fit_transform([[self.path_progress, self.target_start_angle, self.path_length, self.path_deviation]]))[0]
-		if (v_max < 100):
-			v_max = 100
+		v_max = v_max*(1+self.v_diff_ratio)
+		if (v_max < 50):
+			v_max = 50
 
 		if v_mag > v_max:
 			v_clip = v_max/2 + np.random.random()*v_max/2
@@ -393,13 +372,12 @@ def main():
 	#Get mouse events
 	mouse_events = []
 	#filepath = "mouse_data_small.pickle.gz"
-	filepath = "mouse_data.pickle_bak - Copy.gz"
+	#filepath = "mouse_data.pickle_bak - Copy.gz"
+	filepath = "mouse_data.pickle.gz"
 	with gzip.open(filepath, "rb") as prev_events_pickle_file:
 		mouse_events = pickle.load(prev_events_pickle_file)
 
-	#Calculate datapoints from mouse events
-	sample_size = 8000000
-	#data_points = getVelocityDatapoints(mouse_events[0:sample_size])
+	#Populate datapoints from mouse events
 	data_points = getVelocityDatapoints(mouse_events)
 	data_points = populateAccelerationData(data_points)
 	data_points = populateIdleData(data_points)
@@ -414,8 +392,6 @@ def main():
 	max_v_indx = math.floor(len(velocities)*0.99)
 	max_velocity = velocities[max_v_indx]
 	data_points = [i for i in data_points if (i.velocity_magnitude < max_velocity)]
-
-	print(len(data_points))
 	
 	# Generate polynomial features for velocity model fit
 	data_in = np.array([[i.path_progress, i.end_start_angle, i.straight_path_length, i.straight_path_deviation] for i in data_points])
@@ -424,62 +400,38 @@ def main():
 	data_in_poly = poly.fit_transform(data_in)
 
 	# Fit the model
-	model = LinearRegression()
-	model.fit(data_in_poly, velocity_to_fit)
-
-	#Save model to file
-	mouse_model_path = "mouse_profile.pickle"
-	with open(mouse_model_path, "wb") as mouse_model_pickle_file:
-		pickle.dump(model, mouse_model_pickle_file)
+	velocity_model = LinearRegression()
+	velocity_model.fit(data_in_poly, velocity_to_fit)
 
 	# Make predictions
-	l_model = None
-	with open(mouse_model_path, "rb") as mouse_model_pickle_file:
-		l_model = pickle.load(mouse_model_pickle_file)
-
-	y_pred = l_model.predict(data_in_poly)
-
-	k_pred = l_model.predict(poly.fit_transform([[0.5, 180, 700, 0]]))
-	print(k_pred)
+	v_predicted = velocity_model.predict(data_in_poly)
 
 	# Calculate the R-squared score
-	r2 = r2_score(velocity_to_fit, y_pred)
-	diff = velocity_to_fit - y_pred
-	plt.hist(diff, bins=20)
+	r2 = r2_score(velocity_to_fit, v_predicted)
+
+	#Determine mismatch distribution
+	diff_ratios = (velocity_to_fit - v_predicted)/v_predicted
+	diff_ratios.sort()
+	lower_bound_indx = math.ceil(len(diff_ratios)*0.03)
+	upper_bound_indx = math.floor(len(diff_ratios)*0.97)
+	diff_ratios = diff_ratios[lower_bound_indx:upper_bound_indx]
+	plt.hist(diff_ratios, bins=80)
 	plt.show() 
+	v_diff_ratio_avg = np.average(diff_ratios)
+	v_diff_ratio_std = np.std(diff_ratios)
 
-	# Print the R-squared score
-	print("R-squared:", r2)
+	#Save model to file
+	mouse_profile = {}
+	mouse_profile["coefficients"] = velocity_model.coef_
+	mouse_profile["intercept"] = velocity_model.intercept_
+	mouse_profile["v_diff_ratio_avg"] = v_diff_ratio_avg
+	mouse_profile["v_diff_ratio_std"] = v_diff_ratio_std
+	mouse_profile["model"] = velocity_model
 
-	# Extract coefficients and intercept
-	coefficients = l_model.coef_
-	intercept = l_model.intercept_
+	mouse_profile_path = "mouse_profile.pickle"  #currently use pickle rather than json since I need to save the LinearRegression object. Need to find a way to spawn a regression object using known coefficients
+	with open(mouse_profile_path, "wb") as mouse_profile_pickle_file:
+		pickle.dump(mouse_profile, mouse_profile_pickle_file)
 
-	# Construct and print the equation
-	equation = f"v_mag = {intercept:.2f} + {coefficients[0]:.2f} * x1 + {coefficients[1]:.2f} * x2"
-	print(coefficients)
-	#print(equation)
-	sys.exit()
-
-	# fig, axs = plt.subplots(2)
-	# fig.suptitle('Vertically stacked subplots')
-	# axs[0].scatter(path_progress, v_mag)
-	# axs[1].scatter(path_progress, accel_mag)
-
-	# plt.scatter(path_progress, curvature)
-
-	path_length = np.array([i.straight_path_length for i in data_points])
-	path_progress = np.array([i.path_progress for i in data_points])
-	v_mag = np.array([i.velocity_magnitude for i in data_points])
-
-	fig = plt.figure(figsize=(12, 12))
-	ax = fig.add_subplot(projection='3d')
-	ax.scatter(path_length, path_progress, y_pred, color="r")
-	ax.scatter(path_length, path_progress, v_mag, color="b")
-	ax.set_xlabel("path_length")
-	ax.set_ylabel("path_progress")
-	ax.set_zlabel("y_pred")
-	plt.show()
 
 main()
 
