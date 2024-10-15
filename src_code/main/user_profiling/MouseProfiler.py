@@ -19,16 +19,16 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 from pynput import mouse as pmouse
+import progressbar
 
 
 ##############################
 # Globals
 ##############################
-g_log_save_time = 120
 g_newEventQueue = multiprocessing.Queue()
 g_prev_mouse_event_lock = threading.Lock()
 g_prev_mouse_event = None
-
+g_num_clicks = 0
 
 ##############################
 # Mouse data collection
@@ -84,6 +84,9 @@ def on_move(x, y):
 
 
 def on_click(x, y, button, pressed):
+	global g_num_clicks
+	g_num_clicks += 1
+
 	event_obj = MouseEvent(x, y, button=button, button_pressed=pressed)
 	appendMouseEvent(event_obj)
 
@@ -103,13 +106,13 @@ def appendMouseEvent(event_obj):
 	g_prev_mouse_event_lock.release()
 
 
-def saveMouseEvents(filename, new_event_queue):
+def saveMouseEvents(filename, new_event_queue, kill_process, log_save_time=60):
 	filepath = "{}.gz".format(filename)
 	backup_filepath = "{}_bak.gz".format(filename)
 	new_events = []
 
-	while True:
-		time.sleep(g_log_save_time/2)
+	while (not kill_process.is_set()):
+		time.sleep(log_save_time/2)
 
 		#Get new mouse events from queue
 		while (not new_event_queue.empty()):
@@ -117,7 +120,8 @@ def saveMouseEvents(filename, new_event_queue):
 
 		#Skip save if there are no new events
 		if (len(new_events) == 0):
-			time.sleep(g_log_save_time/2)
+			if (not kill_process.is_set()):
+				time.sleep(log_save_time/2)
 			continue
 
 		#Open previous compressed pickle file if it exists
@@ -136,18 +140,16 @@ def saveMouseEvents(filename, new_event_queue):
 			pickle.dump(saved_events, events_pickle_file)
 
 		#Update backup file
-		time.sleep(g_log_save_time/2)
+		if (not kill_process.is_set()):
+			time.sleep(log_save_time/2)
 		shutil.copyfile(filepath, backup_filepath)
 
 		#Clear new events list
 		new_events = []
 
 
-def collectMouseData(mouse_data_filepath="mouse_data.pickle"):
-	#TODO: Add argument to specify data collection time
-	#TODO: Better way to kill the collection process outside of task manager
-
-
+def collectMouseData(mouse_data_filepath="mouse_data.pickle", collection_time_max=1200, target_click_num=1500):
+	print("Collecting mouse data...")
 	mouse_controller = pmouse.Controller()
 
 	x_pos, y_pos = mouse_controller.position
@@ -157,15 +159,38 @@ def collectMouseData(mouse_data_filepath="mouse_data.pickle"):
 	listener = pmouse.Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll)
 	listener.start()
 
-	data_save_proc = multiprocessing.Process(target=saveMouseEvents, args=(mouse_data_filepath, g_newEventQueue))
+	kill_process = multiprocessing.Event()
+	data_save_proc = multiprocessing.Process(target=saveMouseEvents, args=(mouse_data_filepath, g_newEventQueue, kill_process))
 	data_save_proc.start()
-	data_save_proc.join()
-	listener.stop()
 
-	return mouse_data_path
+	widgets = [' [', progressbar.Percentage(), '] ', progressbar.Bar('*')]
+	progress_bar = progressbar.ProgressBar(max_value=100, widgets=widgets).start()
+
+	start_time = time.time()
+	while True:
+		time.sleep(1)
+		elapsed_time = time.time() - start_time
+		if (g_num_clicks > target_click_num):
+			break
+		if (elapsed_time > collection_time_max):
+			print("\nMax collection time exceeded. Stopping data collection")
+			break
+
+		progress = int(100*max(elapsed_time/collection_time_max, float(g_num_clicks)/target_click_num))
+		progress_bar.update(progress)
+	progress_bar.update(100)
+	
+	listener.stop()
+	kill_process.set()
+	data_save_proc.join()
+	listener.join()
+
+	print("\nMouse data collected")
+
+	return "{}.gz".format(mouse_data_filepath)
 
 ##########################################
-# Mouse movement analysis/profiling
+# Mouse movement analysis
 ##########################################
 
 class MousePathType(Enum):
@@ -397,115 +422,8 @@ def filterPaths(data_points, target_path_type):
 		
 
 ##########################################
-# Mouse movement generator
+# Mouse profile creation
 ##########################################
-
-class MousePathGenerator(object):
-	"""docstring for ClassName"""
-	def __init__(self):
-		self.start_x = 0
-		self.start_y = 0
-
-		self.target_x = 0
-		self.target_y = 0
-
-		self.target_start_angle = 0
-
-		self.current_x = 0
-		self.current_y = 0
-
-		self.path_length = 0
-
-		self.v_x = 0
-		self.v_y = 0
-
-		self.wind_x = 0
-		self.wind_y = 0
-		self.wind_v_dampening = np.sqrt(3)
-		self.wind_a_dampening = np.sqrt(5)
-
-		self.GRAV_0 = 800
-		#self.WIND_0 = 4000
-		self.WIND_0 = 3000
-
-		self.last_iter_time = 0
-		self.path_progress = 0
-
-		mouse_profile_path = "mouse_profile.pickle"
-		with open(mouse_profile_path, "rb") as mouse_profile_pickle_file:
-			mouse_profile = pickle.load(mouse_profile_pickle_file)
-			self.velocity_model = mouse_profile["model"]
-			self.v_diff_ratio_avg = mouse_profile["v_diff_ratio_avg"]
-			self.v_diff_ratio_std = mouse_profile["v_diff_ratio_std"]
-	
-		self.poly = PolynomialFeatures(degree=3)
-		self.v_diff_ratio = 0
-
-	def startNewPath(self, start_x, start_y, target_x, target_y):
-		self.start_x = start_x
-		self.start_y = start_y
-
-		self.target_x = target_x
-		self.target_y = target_y
-
-		self.path_length = cartesianDistance(start_x, start_y, target_x, target_y)
-
-		self.last_iter_time = 0
-
-		self.current_x = start_x
-		self.current_y = start_y
-
-		self.v_diff_ratio = max(np.random.normal(self.v_diff_ratio_avg, self.v_diff_ratio_std, 1)[0], -0.8)
-
-	def getNextPosition(self):
-		start_dist = cartesianDistance(self.current_x, self.current_y, self.start_x, self.start_y)
-		target_dist = cartesianDistance(self.current_x, self.current_y, self.target_x, self.target_y)
-
-		self.path_progress = 1-(target_dist/self.path_length)
-		if (self.path_progress < 0):
-			self.path_progress = target_dist/(target_dist+start_dist)
-
-		if (start_dist == 0) or (target_dist == 0):
-			self.target_start_angle = 180
-		else:
-			self.target_start_angle = np.degrees(calcAngle([self.start_x,self.start_y], [self.current_x,self.current_y], [self.target_x,self.target_y]))
-
-		self.path_deviation = (180-self.target_start_angle)/180
-
-		W_mag = min(self.WIND_0*(1-self.path_deviation), target_dist*100)
-		self.wind_x = self.wind_x/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
-		self.wind_y = self.wind_y/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
-
-		grav_x = (self.GRAV_0*(self.target_x-self.current_x))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
-		grav_y = (self.GRAV_0*(self.target_y-self.current_y))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
-
-		self.v_x += self.wind_x + grav_x
-		self.v_y += self.wind_y + grav_y
-
-		v_mag = np.hypot(self.v_x, self.v_y)
-		v_max = self.velocity_model.predict(self.poly.fit_transform([[self.path_progress, self.target_start_angle, self.path_length, self.path_deviation]]))[0]
-		v_max = v_max*(1+self.v_diff_ratio)
-		if (v_max < 50):
-			v_max = 50
-
-		if v_mag > v_max:
-			v_clip = v_max/2 + np.random.random()*v_max/2
-			self.v_x = (self.v_x/v_mag) * v_clip
-			self.v_y = (self.v_y/v_mag) * v_clip
-
-		if (self.last_iter_time == 0):
-			self.last_iter_time = time.time()
-		else:
-			current_time = time.time()
-			time_delta = current_time - self.last_iter_time
-
-			self.current_x += self.v_x*time_delta
-			self.current_y += self.v_y*time_delta
-
-			self.last_iter_time = current_time
-
-		return self.current_x, self.current_y
-
 
 def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_profile.pickle"):
 	#Get mouse events
@@ -514,6 +432,7 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 		mouse_events = pickle.load(prev_events_pickle_file)
 
 	#Populate datapoints from mouse events
+	print("Extracting mouse data points")
 	data_points = getVelocityDatapoints(mouse_events)
 	data_points = populateAccelerationData(data_points)
 	data_points = populateIdleData(data_points)
@@ -536,6 +455,7 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 	data_in_poly = poly.fit_transform(data_in)
 
 	# Fit the model
+	print("Fitting mouse velocity model")
 	velocity_model = LinearRegression()
 	velocity_model.fit(data_in_poly, velocity_to_fit)
 
@@ -556,6 +476,7 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 
 	#Save model to file
 	#Currently use pickle rather than json since I need to save the LinearRegression object. Need to find a way to spawn a regression object using known coefficients
+	print("Writing mouse profile")
 	mouse_profile = {}
 	mouse_profile["coefficients"] = velocity_model.coef_
 	mouse_profile["intercept"] = velocity_model.intercept_
@@ -567,10 +488,24 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 		pickle.dump(mouse_profile, mouse_profile_pickle_file)
 
 
+def createUserProfile():
+	#Get current path
+	script_dir = os.path.dirname(os.path.abspath(__file__))
+	data_output_dir = os.path.join(script_dir, "data")
+	profile_output_dir = os.path.join(script_dir, "profiles")
+
+	#Collect mouse data
+	mouse_data_filepath = os.path.join(data_output_dir, "mouse_data.pickle")
+	mouse_data_filepath = collectMouseData(mouse_data_filepath=mouse_data_filepath)
+
+	#Create mouse profile
+	mouse_profile_path = os.path.join(profile_output_dir, "bespoke_mouse_profile.pickle")
+	generateMouseProfile(mouse_data_filepath, mouse_profile_path=mouse_profile_path)
+
 if __name__ == '__main__':
-	#mouse_data_filepath = collectMouseData()
-	start_time = time.time()
-	mouse_data_filepath = "mouse_data.pickle.gz"
-	generateMouseProfile(mouse_data_filepath)
-	elapsed_time = time.time() - start_time
-	print(int(elapsed_time))
+	mouse_data_filepath = collectMouseData()
+	# start_time = time.time()
+	# mouse_data_filepath = "mouse_data.pickle.gz"
+	# generateMouseProfile(mouse_data_filepath)
+	# elapsed_time = time.time() - start_time
+	# print(int(elapsed_time))

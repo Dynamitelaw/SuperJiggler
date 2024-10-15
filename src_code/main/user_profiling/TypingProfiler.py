@@ -8,6 +8,7 @@ import multiprocessing
 import pickle
 from scipy import stats as scistats
 import matplotlib.pyplot as plt
+import progressbar
 
 
 g_ordered_key_events = []
@@ -49,20 +50,16 @@ def captureKeystrokeData():
 	hook = keyboard.hook(logKeyEvent)
 
 	enoughSamplesCollected = False
-	startTime = time.time()
-	while (not enoughSamplesCollected):
-		doneTemp = True
-		for key in g_keyEventCount:
-			if (g_keyEventCount[key] < 10) and (len(key) < 2):
-				doneTemp = False
-				break
-		enoughSamplesCollected = doneTemp
+	sampleMinimum = 5000	
 
-		elapsedTime = time.time() - startTime
-		if (elapsedTime > 500):
-			enoughSamplesCollected = True
+	widgets = [' [', progressbar.Percentage(), '] ', progressbar.Bar('*')]
+	progress_bar = progressbar.ProgressBar(max_value=sampleMinimum, widgets=widgets).start()
 
-	print("Data collection complete")
+	while (g_numEvents < sampleMinimum):
+		progress_bar.update(g_numEvents)
+	progress_bar.update(g_numEvents)
+
+	print("\nData collection complete")
 	keyboard.unhook(hook)
 	
 
@@ -424,24 +421,34 @@ def createGenericProfile(dataset_path):
 	output_file.close()
 
 
-def main():
+def createUserProfile():
+	#Get current path
+	script_dir = os.path.dirname(os.path.abspath(__file__))
+	data_output_dir = os.path.join(script_dir, "data")
+	profile_output_dir = os.path.join(script_dir, "profiles")
+
 	#Get typing data
-	importRawData()
-	#captureKeystrokeData()
-	#saveRawData()
+	data_output_path = os.path.join(data_output_dir, "typing_data.log")
+	if (os.path.exists(data_output_path)):
+		#We already have typing data. Import it before we continue
+		importRawData(data_output_path)
+
+	captureKeystrokeData()
+	saveRawData(data_output_path)
 
 	#Extract keystroke data
 	key_data = extractKeystrokeData(g_ordered_key_events)
 
 	#Create typing profile
 	generic_profile_path = None
-	if (os.path.exists("generic_typing_profile.json")):
-		generic_profile_path = "generic_typing_profile.json"
+	if (os.path.exists(os.path.join(profile_output_dir, "generic_typing_profile.json"))):
+		generic_profile_path = os.path.join(profile_output_dir, "generic_typing_profile.json")
 
 	typing_profile = analyzeKeystrokes(key_data, generic_profile_path=generic_profile_path)
 	
-	print("Writing keystroke profile")
-	output_file = open("bespoke_typing_profile.json", "w")
+	print("Writing typing profile")
+	profile_output_path = os.path.join(profile_output_dir, "bespoke_typing_profile.json")
+	output_file = open(profile_output_path, "w")
 	output_file.write(json.dumps(typing_profile, indent=2, sort_keys=True))
 	output_file.close()
 
@@ -449,6 +456,10 @@ if __name__ == '__main__':
 	#createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
 	#main()
 
+	path = os.path.dirname(os.path.abspath(__file__))
+	print(path)
+
+	'''
 	alpha = 2.666911108793882
 	loc = -0.04445220243471104
 	scale = 0.5015068298925687
@@ -459,5 +470,5 @@ if __name__ == '__main__':
 	elapsedTime = time.time() - startTime
 	#print(random_samples[0])
 	print(elapsedTime)
-	
+	'''
 
