@@ -13,7 +13,7 @@ def main():
 	print("The script needs ~10 min of typing data for the average user.\nGo to a type test website and start typing.")
 	print("The typing test you use should use complete sentences that have various letter cases and punctuation.")
 	print("https://www.typingtest.com/ is recommended.")
-	#TypingProfiler.createUserProfile()
+	TypingProfiler.createUserProfile()
 	print("Typing profile complete")
 
 	#Create mouse profile
