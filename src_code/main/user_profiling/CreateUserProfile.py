@@ -1,6 +1,7 @@
 import os
 import TypingProfiler
 import MouseProfiler
+from MouseProfiler import MouseEvent
 import sys
 
 

@@ -176,7 +176,7 @@ def collectMouseData(mouse_data_filepath="mouse_data.pickle", collection_time_ma
 			print("\nMax collection time exceeded. Stopping data collection")
 			break
 
-		progress = int(100*max(elapsed_time/collection_time_max, float(g_num_clicks)/target_click_num))
+		progress = max(int(100*max(elapsed_time/collection_time_max, float(g_num_clicks)/target_click_num))-1, 0)
 		progress_bar.update(progress)
 	progress_bar.update(100)
 	
@@ -428,6 +428,7 @@ def filterPaths(data_points, target_path_type):
 def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_profile.pickle"):
 	#Get mouse events
 	mouse_events = []
+	print(mouse_data_filepath)
 	with gzip.open(mouse_data_filepath, "rb") as prev_events_pickle_file:
 		mouse_events = pickle.load(prev_events_pickle_file)
 
@@ -464,6 +465,7 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 
 	# Calculate the R-squared score
 	r2 = r2_score(velocity_to_fit, v_predicted)
+	print("R2 = {}".format(r2))
 
 	#Determine model mismatch distribution
 	diff_ratios = (velocity_to_fit - v_predicted)/v_predicted
@@ -495,11 +497,11 @@ def createUserProfile():
 	profile_output_dir = os.path.join(script_dir, "profiles")
 
 	#Collect mouse data
-	mouse_data_filepath = os.path.join(data_output_dir, "mouse_data.pickle")
+	mouse_data_filepath = os.path.join(data_output_dir, "mouse_data_new.pickle")
 	mouse_data_filepath = collectMouseData(mouse_data_filepath=mouse_data_filepath)
 
 	#Create mouse profile
-	mouse_profile_path = os.path.join(profile_output_dir, "bespoke_mouse_profile.pickle")
+	mouse_profile_path = os.path.join(profile_output_dir, "bespoke_mouse_profile_new.pickle")
 	generateMouseProfile(mouse_data_filepath, mouse_profile_path=mouse_profile_path)
 
 if __name__ == '__main__':
