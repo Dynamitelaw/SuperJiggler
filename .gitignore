@@ -1,4 +1,6 @@
 *bespoke_typing_profile.json
 *typing_data.log
 *mouse_data.pickle*
+*user_profiling/data/*
+*bespoke_mouse_profile.pickle*
 *pycache*
