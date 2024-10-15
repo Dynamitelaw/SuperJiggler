@@ -510,7 +510,6 @@ class MousePathGenerator(object):
 def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_profile.pickle"):
 	#Get mouse events
 	mouse_events = []
-	mouse_data_filepath = "mouse_data.pickle.gz"
 	with gzip.open(mouse_data_filepath, "rb") as prev_events_pickle_file:
 		mouse_events = pickle.load(prev_events_pickle_file)
 
@@ -552,8 +551,6 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 	lower_bound_indx = math.ceil(len(diff_ratios)*0.03)
 	upper_bound_indx = math.floor(len(diff_ratios)*0.97)
 	diff_ratios = diff_ratios[lower_bound_indx:upper_bound_indx]
-	plt.hist(diff_ratios, bins=80)
-	plt.show() 
 	v_diff_ratio_avg = np.average(diff_ratios)
 	v_diff_ratio_std = np.std(diff_ratios)
 
@@ -571,5 +568,9 @@ def generateMouseProfile(mouse_data_filepath, mouse_profile_path="bespoke_mouse_
 
 
 if __name__ == '__main__':
-	mouse_data_filepath = collectMouseData()
+	#mouse_data_filepath = collectMouseData()
+	start_time = time.time()
+	mouse_data_filepath = "mouse_data.pickle.gz"
 	generateMouseProfile(mouse_data_filepath)
+	elapsed_time = time.time() - start_time
+	print(int(elapsed_time))

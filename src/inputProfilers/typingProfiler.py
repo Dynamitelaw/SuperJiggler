@@ -4,7 +4,7 @@ import json
 import numpy as np
 import math
 import os
-import multiprocessing as mproc
+import multiprocessing
 import pickle
 from scipy import stats as scistats
 import matplotlib.pyplot as plt
@@ -387,7 +387,7 @@ def extractKeystrokeDataFromFile(file_path):
 def createGenericProfile(dataset_path):
 	key_data_list = []
 	filepath_list = [os.path.join(dataset_path, i) for i in os.listdir(dataset_path)]
-	with mproc.Pool(40) as proc_pool:
+	with multiprocessing.Pool(os.cpu_count()) as proc_pool:
 		key_data_list = proc_pool.map(extractKeystrokeDataFromFile, filepath_list)
 
 	#Create empty combined data dict
