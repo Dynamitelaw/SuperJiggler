@@ -24,6 +24,67 @@ g_key_name_list = [
 	"space","enter","backspace"
 ]
 
+g_miss_error_keys_dict = {
+	"a": ["s", "w", "z", "q"],
+	"b": ["v", "g", "h", "n"],
+	"c": ["x", "d", "f", "v"],
+	"d": ["f", "s", "e", "r", "c", "x"],
+	"e": ["w", "s", "d", "r"],
+	"f": ["d", "r", "t", "g", "v", "c"],
+	"g": ["f", "t", "v"],
+	"h": ["y", "u", "j", "n"],
+	"i": ["u", "j", "k", "o"],
+	"j": ["h", "k", "u", "n", "m"],
+	"k": ["j", "l", "i", "o", "m", ","],
+	"l": ["k", "o", ",", ";"],
+	"m": ["n", ",", "j", "k"],
+	"n": ["j", "m", "b"],
+	"o": ["i", "k", "l", "p"],
+	"p": ["o", "l", ";", "["],
+	"q": ["w", "s", "a"],
+	"r": ["e", "d", "f", "t"],
+	"s": ["a", "d", "w"],
+	"t": ["f", "r", "g"],
+	"u": ["y", "j", "i"],
+	"v": ["c", "f", "b"],
+	"w": ["s", "e"],
+	"x": ["z", "s", "d", "c"],
+	"y": ["h", "u", "j"],
+	"z": ["a", "s", "x"],
+	"1": ["`", "2"],
+	"2": ["1", "3"],
+	"3": ["2", "4"],
+	"4": ["3", "5"],
+	"5": ["4", "6"],
+	"6": ["5", "7"],
+	"7": ["6", "8"],
+	"8": ["7", "9"],
+	"9": ["8", "0"],
+	"0": ["9", "-"],
+	",": ["m", "."],
+	".": [",", "/"],
+	"/": ["."],
+	";": ["l", "'"],
+	"'": [";"],
+	"[": ["p", "]", ";"],
+	"]": ["[", "\\", "'"],
+	"\\": ["]"],
+	"-": ["0", "="],
+	"=": ["-"],
+	"esc": [],
+	"tab": [],
+	"caps lock": [],
+	"shift": [],
+	"right shift": [],
+	"ctrl": [],
+	"right ctrl": [],
+	"alt": [],
+	"right alt": [],
+	"space": [],
+	"enter": [],
+	"backspace": []
+}
+
 g_keyEventCount = {}
 
 def logKeyEvent(event):
@@ -235,6 +296,12 @@ def analyzeKeystrokes(key_data, generic_profile_path=None):
 	key_stats = {}
 	for keyName in g_key_name_list:
 		key_stats[keyName] = {}
+
+	#Populate possible error keys for each key
+	for keyName in key_stats:
+		key_stats[keyName]["error_keys"] = []
+		if (keyName in g_miss_error_keys_dict):
+			key_stats[keyName]["error_keys"] = g_miss_error_keys_dict[keyName]
 
 	#Calculate hit delay stats for each key
 	for keyName in key_stats:
@@ -453,7 +520,7 @@ def createUserProfile():
 	output_file.close()
 
 if __name__ == '__main__':
-	#createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
+	createGenericProfile("C:\\Users\\Dynamitelaw\\Downloads\\Keystrokes\\Keystrokes\\files_converted")
 	#main()
 
 	path = os.path.dirname(os.path.abspath(__file__))

@@ -1,3 +1,275 @@
+from pynput import keyboard
+import pickle
+import json
+import os
+import time
+from scipy import stats as scistats
+import random
+import numpy as np
+
+
+class IOHandler():
+	def __init__(self, local_machine=False):
+		self.local_machine = local_machine
+
+		self.keyboard_controller = None
+		if (self.local_machine):
+			self.keyboard_controller = keyboard.Controller()
+
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		profile_dir = os.path.join(script_dir, "user_profiling", "profiles")
+
+		typing_profile_path = None
+		if (os.path.exists(os.path.join(profile_dir, "bespoke_typing_profile.json"))):
+			typing_profile_path = os.path.join(profile_dir, "bespoke_typing_profile.json")
+		elif (os.path.exists(os.path.join(profile_dir, "generic_typing_profile.json"))):
+			typing_profile_path = os.path.join(profile_dir, "generic_typing_profile.json")
+		else:
+			raise FileNotFoundError("Cannot find a typing profile")
+
+		typing_profile_file = open(typing_profile_path, "r")
+		self.typing_profile = json.load(typing_profile_file)
+		typing_profile_file.close()
+
+		self.key_shift_dict = {
+			"!": "1",
+			"@": "2",
+			"#": "3",
+			"$": "4",
+			"%": "5",
+			"^": "6",
+			"&": "7",
+			"*": "8",
+			"(": "9",
+			")": "0",
+			"_": "-",
+			"+": "=",
+			"{": "[",
+			"}": "]",
+			":": ";",
+			"\"": "'",
+			"<": ",",
+			">": ".",
+			"?": "/",
+			"~": "`"
+		}
+
+		self.char_replace_dict = {
+			" ": "space",
+			"\n": "enter",
+			"\t": "tab"
+		}
+
+		self.local_key_replace_dict = {
+			"backspace" : keyboard.Key.backspace,
+			"caps lock" : keyboard.Key.caps_lock,
+			"enter" : keyboard.Key.enter,
+			"esc" : keyboard.Key.esc,
+			"space" : keyboard.Key.space,
+			"tab" : keyboard.Key.tab,
+			"shift" : keyboard.Key.shift,
+			"right shift" : keyboard.Key.shift_r,
+			"alt" : keyboard.Key.alt,
+			"right alt" : keyboard.Key.alt_r,
+			"ctrl" : keyboard.Key.ctrl,
+			"right ctrl" : keyboard.Key.ctrl_r,
+		}
+
+
+	def getKeyDelays(self, key_name, prev_key=None):
+		#Get delay distributions
+		hit_delay_dist = self.typing_profile["overall"]["hit_delay"]
+		hold_time_dist = self.typing_profile["overall"]["hold_time"]
+
+		if (key_name in self.typing_profile["per_key"]):
+			hit_delay_dist = self.typing_profile["per_key"][key_name]["hit_delay"]["overall"]
+			hold_time_dist = self.typing_profile["per_key"][key_name]["hold_time"]
+			if (not (prev_key is None)) and (prev_key in self.typing_profile["per_key"][key_name]["hit_delay"]["per_prev_key"]):
+				hit_delay_dist = self.typing_profile["per_key"][key_name]["hit_delay"]["per_prev_key"][prev_key]
+
+		#Sample distributions for delays
+		hit_delay = -1
+		while(hit_delay < 0):
+			hit_delay = min(scistats.alpha.rvs(hit_delay_dist["alpha"], hit_delay_dist["loc"], hit_delay_dist["scale"], size=1)[0], 1.5)
+
+
+		hold_time = -1
+		while(hold_time < 0):
+			hold_time = min(scistats.alpha.rvs(hold_time_dist["alpha"], hold_time_dist["loc"], hold_time_dist["scale"], size=1)[0], 0.5)
+
+
+		return hit_delay, hold_time
+
+
+	def typeText(self, text):
+		#Convert text block into sequence of key presses
+		letterSequence = list(text)
+
+		shiftPressed = False
+		keyPresses = []
+		for l in letterSequence:
+			key_name = l
+			if (l.isupper()):
+				key_name = l.lower()
+				if (not shiftPressed):
+					keyPresses.append("SHIFT_PRESS")
+					shiftPressed = True
+				keyPresses.append(key_name)
+
+			elif (key_name in self.key_shift_dict):
+				if (not shiftPressed):
+					keyPresses.append("SHIFT_PRESS")
+					shiftPressed = True
+
+				key_name = self.key_shift_dict[key_name]
+				keyPresses.append(key_name)
+
+			elif (key_name in self.char_replace_dict):
+				if (shiftPressed and l.islower()):
+					keyPresses.append("SHIFT_RELEASE")
+					shiftPressed = False
+
+				key_name = self.char_replace_dict[key_name]
+				keyPresses.append(key_name)
+
+			else:
+				if (shiftPressed and l.islower()):
+					keyPresses.append("SHIFT_RELEASE")
+					shiftPressed = False
+
+				keyPresses.append(key_name)
+
+		#Insert typing errors
+		keyPressesImperfect = []
+		error_rate = self.typing_profile["overall"]["error_rate"]
+		error_length_dist = self.typing_profile["overall"]["error_overshoot_len"]
+		for indx in range(len(keyPresses)):
+			key_name = keyPresses[indx]
+			if not (key_name in self.typing_profile["per_key"]):
+				keyPressesImperfect.append(key_name)
+				continue
+
+			#Ensure this key has potential miss keys
+			error_keys = self.typing_profile["per_key"][key_name]["error_keys"]
+			if (len(error_keys) == 0):
+				keyPressesImperfect.append(key_name)
+				continue
+
+			#Determine if we insert an error on before this key press
+			insert_error = (random.random() < error_rate)
+			if (not insert_error):
+				keyPressesImperfect.append(key_name)
+				continue
+
+			#Determine error length and error type
+			error_length = min(1, int(np.random.normal(error_length_dist["avg"], error_length_dist["std"], 1)))
+
+			error_type_seed = random.random()
+			error_type = None
+			#52.9% substitution, 25.6% omission, 21.5% insertion #Dhakal, V.; Feit, A.M.; Kristensson, P.O.; Oulasvirta, A. Observations on typing from 136 million keystrokes. In Proceedings of the 2018 CHI Conference on Human Factors in Computing Systems (CHI’18), Montreal, QC, Canada, 21–26 April 2018; pp. 6.
+			if (error_type_seed < 0.215):
+				error_type = "insertion"
+			elif (error_type_seed < 0.471):
+				error_type = "omission"
+			else:	
+				error_type = "substitution"
+
+			#Generate error key presses
+			remaining_text_len = len(keyPresses) - indx - 1
+			error_presses = []
+			if (error_type == "insertion"):
+				error_presses.append(random.choice(error_keys))
+				error_presses.append(key_name)
+				remaining_err_len = error_length - 2
+				if (remaining_err_len > 0) and (remaining_err_len < remaining_text_len):
+					error_presses += [k for k in keyPresses[indx+1:indx+1+remaining_err_len] if not ("SHIFT" in k)]
+
+			if (error_type == "omission") and (remaining_text_len > error_length):
+				error_presses += [k for k in keyPresses[indx+1:indx+1+error_length] if not ("SHIFT" in k)]
+
+			if (error_type == "substitution"):
+				error_presses.append(random.choice(error_keys))
+				remaining_err_len = error_length - 1
+				if (remaining_err_len > 0) and (remaining_err_len < remaining_text_len):
+					error_presses += [k for k in keyPresses[indx+1:indx+1+remaining_err_len] if not ("SHIFT" in k)]
+
+			#Correct error
+			num_backspace = len(error_presses)
+			for i in range(num_backspace):
+				error_presses.append("backspace")
+			
+			keyPressesImperfect += error_presses
+			keyPressesImperfect.append(key_name)
+
+
+		#Generate key delays and hold times
+		key_times = []
+		for keyIndx in range(len(keyPressesImperfect)):
+			key_name = keyPressesImperfect[keyIndx].replace("SHIFT_PRESS", "shift")
+			prev_key = None
+			if (keyIndx > 0):
+				prev_key = keyPressesImperfect[keyIndx-1].replace("SHIFT_PRESS", "shift")
+
+			hit_delay, hold_time = self.getKeyDelays(key_name, prev_key=prev_key)
+			key_times.append((key_name, hit_delay, hold_time))
+
+		#Generate list of key events with absolute timestamps starting at 0
+		key_events = []
+		current_time = 0
+		for key_press in key_times:
+			key_name, hit_delay, hold_time = key_press
+			current_time += hit_delay
+			if (key_name == "shift"):
+				press_event = (current_time, "shift", "press")
+				key_events.append(press_event)
+			elif (key_name == "SHIFT_RELEASE"):
+				release_event = (current_time, "shift", "release")
+				key_events.append(release_event)
+			else:
+				press_event = (current_time, key_name, "press")
+				key_events.append(press_event)
+				release_event = (current_time+hold_time, key_name, "release")
+				key_events.append(release_event)
+
+		key_events.sort()  #sort times to account for rollover
+
+		#Convert absolute timestamps to relative delays
+		key_event_delays = []
+		for indx in range(len(key_events)):
+			prev_time = 0
+			if (indx > 0):
+				prev_time = key_events[indx-1][0]
+
+			event_time = key_events[indx][0]
+			delay = event_time - prev_time
+			delay_event = (delay, key_events[indx][1], key_events[indx][2])
+			key_event_delays.append(delay_event)
+
+
+		#Type text
+		for key_event in key_event_delays:
+			delay, key, event_type = key_event
+			if (key in self.local_key_replace_dict):
+				key = self.local_key_replace_dict[key]
+			time.sleep(delay)
+			if (event_type == "press"):
+				self.keyboard_controller.press(key)
+			elif (event_type == "release"):
+				self.keyboard_controller.release(key)
+
+
+	def moveMouse(self, x_pos, y_pos):
+		pass
+
+	def leftClickMouse(self):
+		pass
+
+	def rightClickMouse(self):
+		pass
+
+	def clickButton(self, button_img_path):
+		pass
+
 ##########################################
 # Mouse movement generator
 ##########################################
@@ -107,3 +379,13 @@ class MousePathGenerator(object):
 			self.last_iter_time = current_time
 
 		return self.current_x, self.current_y
+
+
+def main():
+	time.sleep(2)
+	ioHandler = IOHandler(local_machine=True)
+	text = "HELLO darkness my old friend!\nIt's great to see you again. I missed you"
+	ioHandler.typeText(text)
+
+if __name__ == '__main__':
+	main()
