@@ -1,4 +1,5 @@
-from pynput import keyboard
+from pynput import keyboard, mouse
+from pynput.mouse import Button
 import pickle
 import json
 import os
@@ -6,15 +7,18 @@ import time
 from scipy import stats as scistats
 import random
 import numpy as np
+from sklearn.preprocessing import PolynomialFeatures
 
 
-class IOHandler():
+class KeyboardHandler():
 	def __init__(self, local_machine=False):
 		self.local_machine = local_machine
 
 		self.keyboard_controller = None
 		if (self.local_machine):
 			self.keyboard_controller = keyboard.Controller()
+		else:
+			raise ValueError("Not implemented yet")
 
 		script_dir = os.path.dirname(os.path.abspath(__file__))
 		profile_dir = os.path.join(script_dir, "user_profiling", "profiles")
@@ -101,7 +105,7 @@ class IOHandler():
 		return hit_delay, hold_time
 
 
-	def typeText(self, text):
+	def genKeypressSequence(self, text):
 		#Convert text block into sequence of key presses
 		letterSequence = list(text)
 
@@ -139,6 +143,10 @@ class IOHandler():
 
 				keyPresses.append(key_name)
 
+		return keyPresses
+
+
+	def insertTypingErrors(self, keyPresses):
 		#Insert typing errors
 		keyPressesImperfect = []
 		error_rate = self.typing_profile["overall"]["error_rate"]
@@ -202,13 +210,17 @@ class IOHandler():
 			keyPressesImperfect.append(key_name)
 
 
+		return keyPressesImperfect
+
+
+	def genKeypressTimes(self, keyPresses):
 		#Generate key delays and hold times
 		key_times = []
-		for keyIndx in range(len(keyPressesImperfect)):
-			key_name = keyPressesImperfect[keyIndx].replace("SHIFT_PRESS", "shift")
+		for keyIndx in range(len(keyPresses)):
+			key_name = keyPresses[keyIndx].replace("SHIFT_PRESS", "shift")
 			prev_key = None
 			if (keyIndx > 0):
-				prev_key = keyPressesImperfect[keyIndx-1].replace("SHIFT_PRESS", "shift")
+				prev_key = keyPresses[keyIndx-1].replace("SHIFT_PRESS", "shift")
 
 			hit_delay, hold_time = self.getKeyDelays(key_name, prev_key=prev_key)
 			key_times.append((key_name, hit_delay, hold_time))
@@ -246,6 +258,14 @@ class IOHandler():
 			key_event_delays.append(delay_event)
 
 
+		return key_event_delays
+
+
+	def typeText(self, text):
+		keyPresses = self.genKeypressSequence(text)
+		keyPresses = self.insertTypingErrors(keyPresses)
+		key_event_delays = self.genKeypressTimes(keyPresses)
+
 		#Type text
 		for key_event in key_event_delays:
 			delay, key, event_type = key_event
@@ -258,25 +278,26 @@ class IOHandler():
 				self.keyboard_controller.release(key)
 
 
-	def moveMouse(self, x_pos, y_pos):
-		pass
+def cartesianDistance(p1_x, p1_y, p2_x, p2_y):
+	return np.sqrt((p1_x - p2_x)**2 + (p1_y - p2_y)**2)
 
-	def leftClickMouse(self):
-		pass
+def calcAngle(p_a, p_b, p_c):
+	ba = [p_a[i] - p_b[i] for i in range(len(p_a))]
+	bc = [p_c[i] - p_b[i] for i in range(len(p_c))]
 
-	def rightClickMouse(self):
-		pass
+	cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+	if (cosine_angle < -1):
+		cosine_angle = -0.99
+	if (cosine_angle > 1):
+		cosine_angle = 0.99
+	angle = np.arccos(cosine_angle)
 
-	def clickButton(self, button_img_path):
-		pass
+	return angle
 
-##########################################
-# Mouse movement generator
-##########################################
+class MouseHandler():
+	def __init__(self, local_machine=False, polling_rate=200):
+		self.local_machine = local_machine
 
-class MousePathGenerator(object):
-	"""docstring for ClassName"""
-	def __init__(self):
 		self.start_x = 0
 		self.start_y = 0
 
@@ -285,8 +306,8 @@ class MousePathGenerator(object):
 
 		self.target_start_angle = 0
 
-		self.current_x = 0
-		self.current_y = 0
+		self.current_x = None
+		self.current_y = None
 
 		self.path_length = 0
 
@@ -299,13 +320,22 @@ class MousePathGenerator(object):
 		self.wind_a_dampening = np.sqrt(5)
 
 		self.GRAV_0 = 800
-		#self.WIND_0 = 4000
-		self.WIND_0 = 3000
+		self.GRAV_MAX = 1000000
+		self.WIND_0 = 1000
 
 		self.last_iter_time = 0
 		self.path_progress = 0
 
-		mouse_profile_path = "mouse_profile.pickle"
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		profile_dir = os.path.join(script_dir, "user_profiling", "profiles")
+
+		mouse_profile_path = None
+		if (os.path.exists(os.path.join(profile_dir, "bespoke_mouse_profile.pickle"))):
+			mouse_profile_path = os.path.join(profile_dir, "bespoke_mouse_profile.pickle")
+		elif (os.path.exists(os.path.join(profile_dir, "generic_mouse_profile.pickle"))):
+			mouse_profile_path = os.path.join(profile_dir, "generic_mouse_profile.pickle")
+		else:
+			raise FileNotFoundError("Cannot find a mouse profile")
 		with open(mouse_profile_path, "rb") as mouse_profile_pickle_file:
 			mouse_profile = pickle.load(mouse_profile_pickle_file)
 			self.velocity_model = mouse_profile["model"]
@@ -314,6 +344,17 @@ class MousePathGenerator(object):
 	
 		self.poly = PolynomialFeatures(degree=3)
 		self.v_diff_ratio = 0
+
+		self.polling_period = 1/float(polling_rate)
+
+		self.holt_time_avg = 0.03
+		self.holt_time_std = 0.005
+
+		self.mouse_controller = None
+		if (self.local_machine):
+			self.mouse_controller = mouse.Controller()
+		else:
+			raise ValueError("Not implemented yet")
 
 	def startNewPath(self, start_x, start_y, target_x, target_y):
 		self.start_x = start_x
@@ -331,14 +372,17 @@ class MousePathGenerator(object):
 
 		self.v_diff_ratio = max(np.random.normal(self.v_diff_ratio_avg, self.v_diff_ratio_std, 1)[0], -0.8)
 
-	def getNextPosition(self):
+	def takeMovementStep(self):
+		#Get current distance from start point and target
 		start_dist = cartesianDistance(self.current_x, self.current_y, self.start_x, self.start_y)
 		target_dist = cartesianDistance(self.current_x, self.current_y, self.target_x, self.target_y)
 
+		#Calculate path progress
 		self.path_progress = 1-(target_dist/self.path_length)
 		if (self.path_progress < 0):
 			self.path_progress = target_dist/(target_dist+start_dist)
 
+		#Calculate angle between current position, start point, and target
 		if (start_dist == 0) or (target_dist == 0):
 			self.target_start_angle = 180
 		else:
@@ -346,46 +390,193 @@ class MousePathGenerator(object):
 
 		self.path_deviation = (180-self.target_start_angle)/180
 
+		#Determine wind speed and direction
 		W_mag = min(self.WIND_0*(1-self.path_deviation), target_dist*100)
 		self.wind_x = self.wind_x/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
 		self.wind_y = self.wind_y/self.wind_v_dampening + (2*np.random.random()-1)*W_mag/self.wind_a_dampening
 
+		#Determine gravitational force towards target
 		grav_x = (self.GRAV_0*(self.target_x-self.current_x))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
 		grav_y = (self.GRAV_0*(self.target_y-self.current_y))/(target_dist*(1-self.path_progress)*(1-self.path_deviation))
 
-		self.v_x += self.wind_x + grav_x
-		self.v_y += self.wind_y + grav_y
+		#Clip gravitational force
+		if (np.isnan(grav_x)):
+			grav_x = 0
+		grav_x = min(grav_x, self.GRAV_MAX)
+		grav_x = max(grav_x, -1*self.GRAV_MAX)
 
-		v_mag = np.hypot(self.v_x, self.v_y)
+		if (np.isnan(grav_y)):
+			grav_y = 0
+		grav_y = min(grav_y, self.GRAV_MAX)
+		grav_y = max(grav_y, -1*self.GRAV_MAX)
+
+		#Determine new x and y velocity
+		self.v_x += self.wind_x + grav_x
+		if (np.isnan(self.v_x)):
+			self.v_x = self.wind_x + grav_x
+
+		self.v_y += self.wind_y + grav_y
+		if (np.isnan(self.v_y)):
+			self.v_y = self.wind_y + grav_y
+
+		#Clip velocity magnitude
+		v_mag = np.hypot(self.v_x, self.v_y)			
 		v_max = self.velocity_model.predict(self.poly.fit_transform([[self.path_progress, self.target_start_angle, self.path_length, self.path_deviation]]))[0]
 		v_max = v_max*(1+self.v_diff_ratio)
-		if (v_max < 50):
-			v_max = 50
+		v_max = max(v_max, 200*(1+self.v_diff_ratio))
 
+		v_clip = None
 		if v_mag > v_max:
 			v_clip = v_max/2 + np.random.random()*v_max/2
 			self.v_x = (self.v_x/v_mag) * v_clip
 			self.v_y = (self.v_y/v_mag) * v_clip
 
+		#Move mouse
 		if (self.last_iter_time == 0):
 			self.last_iter_time = time.time()
 		else:
 			current_time = time.time()
 			time_delta = current_time - self.last_iter_time
 
-			self.current_x += self.v_x*time_delta
-			self.current_y += self.v_y*time_delta
+			x_delta =  int(self.v_x*time_delta)
+			y_delta =  int(self.v_y*time_delta)
 
-			self.last_iter_time = current_time
+			if (abs(x_delta) > 0) or (abs(y_delta) > 0):
+				self.current_x += x_delta
+				self.current_y += y_delta
 
-		return self.current_x, self.current_y
+				self.mouse_controller.move(x_delta, y_delta)
+
+				self.last_iter_time = current_time
+
+
+	def moveMouse(self, x_pos, y_pos, pixel_tolerance=4):
+		#Update current mouse position
+		start_x = self.current_x
+		start_y = self.current_y
+
+		if (self.local_machine):
+			start_x, start_y = self.mouse_controller.position
+		else:
+			raise ValueError("Not implemented yet")
+
+		#Move to target position
+		self.startNewPath(start_x, start_y, x_pos, y_pos)
+		targetReached = (self.current_x == x_pos) and (self.current_y == y_pos)
+		prev_x, prev_y = self.current_x, self.current_y
+		same_pos_cnt = 0
+		while (not targetReached):
+			self.takeMovementStep()
+			targetReached = (self.current_x == x_pos) and (self.current_y == y_pos)
+			time.sleep(self.polling_period)
+			if ((prev_x == self.current_x) and (prev_x == self.current_x)):
+				same_pos_cnt += 1
+			else:
+				same_pos_cnt = 0
+
+			if (same_pos_cnt > 10):
+				targetReached = (abs(self.current_x - x_pos) <= pixel_tolerance) and (abs(self.current_y - y_pos) <= pixel_tolerance)
+
+			prev_x, prev_y = self.current_x, self.current_y
+
+	def leftClickMouse(self):
+		if (self.local_machine):
+			self.mouse_controller.press(Button.left)
+			time.sleep(max(np.random.normal(self.holt_time_avg, self.holt_time_std, 1)[0], 0.01))
+			self.mouse_controller.release(Button.left)
+		else:
+			raise ValueError("Not implemented yet")
+
+	def rightClickMouse(self):
+		if (self.local_machine):
+			self.mouse_controller.press(Button.right)
+			time.sleep(max(np.random.normal(self.holt_time_avg, self.holt_time_std, 1)[0], 0.01))
+			self.mouse_controller.release(Button.right)
+		else:
+			raise ValueError("Not implemented yet")
+
+	def clickButton(self, button_img_path):
+		pass
+
+
+class IOHandler():
+	def __init__(self, local_machine=False):
+		self.local_machine = local_machine
+
+		self.keyboardHandler = KeyboardHandler(local_machine=local_machine)
+		self.mouseHandler = MouseHandler(local_machine=local_machine)
+
+		self.mouse_switch_time_avg = 0.7
+		self.mouse_switch_time_std = 0.15
+
+	def typeText(self, text):
+		self.keyboardHandler.typeText(text)
+		time.sleep(max(np.random.normal(self.mouse_switch_time_avg, self.mouse_switch_time_std, 1)[0], 0.01))
+
+	def moveMouse(self, x_pos, y_pos):
+		self.mouseHandler.moveMouse(x_pos, y_pos)
+
+	def leftClickMouse(self):
+		self.mouseHandler.leftClickMouse()
+
+	def rightClickMouse(self):
+		self.mouseHandler.rightClickMouse()
+
+	def clickButton(self, button_img_path):
+		self.mouseHandler.clickButton(button_img_path)
 
 
 def main():
-	time.sleep(2)
+	time.sleep(1)
 	ioHandler = IOHandler(local_machine=True)
 	text = "HELLO darkness my old friend!\nIt's great to see you again. I missed you"
-	ioHandler.typeText(text)
+	#ioHandler.typeText(text)
+
+	mousePositions = [
+		(1280, 720),
+		(850, 475),
+		(850, 950),
+		(1280, 720),
+		(850, 950),
+		(1690, 950),
+		(1280, 720),
+		(1690, 950),
+		(1690, 475),
+		(1280, 720),
+		(1690, 475),
+		(850, 475),
+		(1280, 720),
+		(1152, 648),
+		(1152, 792),
+		(1280, 720),
+		(1152, 792),
+		(1408, 792),
+		(1280, 720),
+		(1408, 792),
+		(1408, 648),
+		(1280, 720),
+		(1408, 648),
+		(1152, 648),
+		(1280, 720),
+		(256, 144),
+		(256, 1296),
+		(1280, 720),
+		(256, 1296),
+		(2304, 1296),
+		(1280, 720),
+		(2304, 1296),
+		(2304, 144),
+		(1280, 720),
+		(2304, 144),
+		(256, 144),
+		(1280, 720)
+	]
+	#ioHandler.mouseHandler.printMousePosition()
+	ioHandler.mouseHandler.mouse_controller.press(Button.left)
+	for repeat in range(10):
+		for position in mousePositions:
+			x_pos, y_pos = position
+			ioHandler.moveMouse(x_pos, y_pos)
 
 if __name__ == '__main__':
 	main()
