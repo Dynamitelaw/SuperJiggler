@@ -9,6 +9,8 @@ import random
 import numpy as np
 from sklearn.preprocessing import PolynomialFeatures
 
+from ScreenHandler import *
+
 
 class KeyboardHandler():
 	def __init__(self, local_machine=False):
@@ -495,8 +497,11 @@ class MouseHandler():
 		else:
 			raise ValueError("Not implemented yet")
 
-	def clickButton(self, button_img_path):
-		pass
+	def getMousePostion(self):
+		if (self.local_machine):
+			return self.mouse_controller.position
+		else:
+			raise ValueError("Not implemented yet")
 
 
 class IOHandler():
@@ -505,9 +510,12 @@ class IOHandler():
 
 		self.keyboardHandler = KeyboardHandler(local_machine=local_machine)
 		self.mouseHandler = MouseHandler(local_machine=local_machine)
+		self.screen_handler = ScreenHandler(local_machine=local_machine)
 
 		self.mouse_switch_time_avg = 0.7
 		self.mouse_switch_time_std = 0.15
+
+		self.button_click_boundary = 0.8
 
 	def typeText(self, text):
 		self.keyboardHandler.typeText(text)
@@ -523,60 +531,34 @@ class IOHandler():
 		self.mouseHandler.rightClickMouse()
 
 	def clickButton(self, button_img_path):
-		self.mouseHandler.clickButton(button_img_path)
+		#Get location of button
+		x_pos, y_pos, x_width, y_height = self.screen_handler.getImageLocation(button_img_path)
+
+		#Chose random position near center of button
+		x_offset = np.random.normal(0, x_width/6, 1)[0]
+		while(abs(x_offset) > x_width*self.button_click_boundary*0.5):
+			x_offset = np.random.normal(0, x_width/6, 1)[0]
+
+		y_offset = np.random.normal(0, y_height/6, 1)[0]
+		while(abs(y_offset) > y_height*self.button_click_boundary*0.5):
+			y_offset = np.random.normal(0, y_height/6, 1)[0]
+
+		x_pos += int(x_offset)
+		y_pos += int(y_offset)
+
+		#Move to button position and click
+		self.moveMouse(x_pos, y_pos)
+		self.leftClickMouse()
 
 
 def main():
-	time.sleep(1)
+	time.sleep(5)
 	ioHandler = IOHandler(local_machine=True)
 	text = "HELLO darkness my old friend!\nIt's great to see you again. I missed you"
-	#ioHandler.typeText(text)
+	ioHandler.typeText(text)
 
-	mousePositions = [
-		(1280, 720),
-		(850, 475),
-		(850, 950),
-		(1280, 720),
-		(850, 950),
-		(1690, 950),
-		(1280, 720),
-		(1690, 950),
-		(1690, 475),
-		(1280, 720),
-		(1690, 475),
-		(850, 475),
-		(1280, 720),
-		(1152, 648),
-		(1152, 792),
-		(1280, 720),
-		(1152, 792),
-		(1408, 792),
-		(1280, 720),
-		(1408, 792),
-		(1408, 648),
-		(1280, 720),
-		(1408, 648),
-		(1152, 648),
-		(1280, 720),
-		(256, 144),
-		(256, 1296),
-		(1280, 720),
-		(256, 1296),
-		(2304, 1296),
-		(1280, 720),
-		(2304, 1296),
-		(2304, 144),
-		(1280, 720),
-		(2304, 144),
-		(256, 144),
-		(1280, 720)
-	]
-	#ioHandler.mouseHandler.printMousePosition()
-	ioHandler.mouseHandler.mouse_controller.press(Button.left)
-	for repeat in range(10):
-		for position in mousePositions:
-			x_pos, y_pos = position
-			ioHandler.moveMouse(x_pos, y_pos)
+	ioHandler.clickButton("button.png")
+
 
 if __name__ == '__main__':
 	main()
