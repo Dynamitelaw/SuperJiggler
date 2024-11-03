@@ -531,6 +531,10 @@ class IOHandler():
 		self.mouseHandler.rightClickMouse()
 
 	def clickButton(self, button_img_path):
+		#Check image location
+		if not (os.path.exists(button_img_path)):
+			raise FileNotFoundError("Could not find button image \"{}\"".format(button_img_path))
+			
 		#Get location of button
 		x_pos, y_pos, x_width, y_height = self.screen_handler.getImageLocation(button_img_path)
 
