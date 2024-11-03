@@ -262,6 +262,11 @@ class KeyboardHandler():
 
 		return key_event_delays
 
+	def pressKey(self, key):
+		self.keyboard_controller.press(key)
+
+	def releaseKey(self, key):
+		self.keyboard_controller.release(key)
 
 	def typeText(self, text):
 		keyPresses = self.genKeypressSequence(text)
@@ -521,6 +526,12 @@ class IOHandler():
 		self.keyboardHandler.typeText(text)
 		time.sleep(max(np.random.normal(self.mouse_switch_time_avg, self.mouse_switch_time_std, 1)[0], 0.01))
 
+	def pressKey(self, key):
+		self.keyboardHandler.pressKey(key)
+
+	def releaseKey(self, key):
+		self.keyboardHandler.releaseKey(key)
+
 	def moveMouse(self, x_pos, y_pos):
 		self.mouseHandler.moveMouse(x_pos, y_pos)
 
@@ -530,13 +541,15 @@ class IOHandler():
 	def rightClickMouse(self):
 		self.mouseHandler.rightClickMouse()
 
-	def clickButton(self, button_img_path):
-		#Check image location
-		if not (os.path.exists(button_img_path)):
-			raise FileNotFoundError("Could not find button image \"{}\"".format(button_img_path))
-			
+	def clickButton(self, button_img_path=None, button_text=None, bounding_box=None):
 		#Get location of button
-		x_pos, y_pos, x_width, y_height = self.screen_handler.getImageLocation(button_img_path)
+		x_pos, y_pos, x_width, y_height = (None, None, None, None)
+		if not (button_img_path is None):
+			x_pos, y_pos, x_width, y_height = self.screen_handler.getImageLocation(button_img_path, bounding_box=bounding_box)
+		elif not (button_text is None) and (len(button_text.strip()) > 0):
+			x_pos, y_pos, x_width, y_height = self.screen_handler.getTextLocation(button_text, bounding_box=bounding_box)
+		else:
+			raise ValueError("Missing input argument. Either button_img_path or button_text must be specified")
 
 		#Chose random position near center of button
 		x_offset = np.random.normal(0, x_width/6, 1)[0]
@@ -554,6 +567,8 @@ class IOHandler():
 		self.moveMouse(x_pos, y_pos)
 		self.leftClickMouse()
 
+		return (x_pos, y_pos)
+
 
 def main():
 	time.sleep(5)
@@ -561,8 +576,12 @@ def main():
 	text = "HELLO darkness my old friend!\nIt's great to see you again. I missed you"
 	ioHandler.typeText(text)
 
-	ioHandler.clickButton("button.png")
+	ioHandler.clickButton(button_img_path="button.png")
 
 
 if __name__ == '__main__':
-	main()
+	#main()
+	ioHandler = IOHandler(local_machine=True)
+	while True:
+		print(ioHandler.mouseHandler.getMousePostion())
+		time.sleep(0.3)

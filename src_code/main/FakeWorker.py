@@ -113,4 +113,5 @@ if __name__ == '__main__':
 	#main()
 	ioHandler = IOHandler(local_machine=True)
 	chrome = ChromeHandler(ioHandler)
-	chrome.openChrome()
+	#chrome.openChrome()
+	chrome.googleSearch()
