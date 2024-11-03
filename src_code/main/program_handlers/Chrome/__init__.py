@@ -1,1 +1,1 @@
-from program_handlers.Chrome.ProgramHandler import *
+from program_handlers.Chrome.ChromeHandler import *
