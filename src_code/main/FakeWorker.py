@@ -1,3 +1,5 @@
+import platform
+
 from program_handlers import *
 from IOHandler import *
 
@@ -110,8 +112,13 @@ def main():
 
 
 if __name__ == '__main__':
-	#main()
-	ioHandler = IOHandler(local_machine=True)
+	#Determine if we are running on target machine, or on a Raspberry Pi
+	local_machine = True
+	if ("aarch" in platform.machine()) and ("Linux" in platform.system()) and ("rpt-rpi" in system.release()):
+		local_machine = False
+	print(local_machine)
+	
+	ioHandler = IOHandler(local_machine=local_machine)
 	chrome = ChromeHandler(ioHandler)
 	#chrome.openChrome()
-	chrome.googleSearch()
+	#chrome.googleSearch()
