@@ -6,7 +6,6 @@ opencv_contrib_python==4.10.0.84
 opencv_python==4.10.0.84
 opencv_python_headless==4.10.0.84
 pandas==1.5.3
-Pillow==9.4.0
 Pillow==11.0.0
 progressbar33==2.4
 pynput==1.7.7
