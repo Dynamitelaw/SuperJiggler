@@ -114,7 +114,7 @@ def main():
 if __name__ == '__main__':
 	#Determine if we are running on target machine, or on a Raspberry Pi
 	local_machine = True
-	if ("aarch" in platform.machine()) and ("Linux" in platform.system()) and ("rpt-rpi" in system.release()):
+	if ("aarch" in platform.machine()) and ("Linux" in platform.system()) and ("rpt-rpi" in platform.release()):
 		local_machine = False
 	print(local_machine)
 	
